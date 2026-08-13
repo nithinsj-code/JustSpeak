@@ -1,13 +1,39 @@
+@import url('https://fonts.googleapis.com/css2?family=Kalam:wght@300;400;700&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,300&family=Noto+Serif+Tamil:wght@400;600&display=swap');
+
 /* ============================================================
    JustSpeak Design System
    Aesthetic: Warm terracotta & Tamil Nadu craft art
    Fonts: Kalam (display) + Noto Serif Tamil (Tamil text) + DM Sans (UI)
    ============================================================ */
 
-@import url('https://fonts.googleapis.com/css2?family=Kalam:wght@300;400;700&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,300&family=Noto+Serif+Tamil:wght@400;600&display=swap');
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
 
 /* ── Design Tokens ─────────────────────────────────────────── */
 :root {
+  /* shadcn / Tailwind HSL Tokens */
+  --background: 24 50% 12%;
+  --foreground: 42 60% 90%;
+  --card: 24 45% 15%;
+  --card-foreground: 42 60% 90%;
+  --popover: 24 45% 15%;
+  --popover-foreground: 42 60% 90%;
+  --primary: 18 85% 50%;
+  --primary-foreground: 42 60% 95%;
+  --secondary: 24 35% 22%;
+  --secondary-foreground: 42 60% 90%;
+  --muted: 24 25% 20%;
+  --muted-foreground: 42 30% 70%;
+  --accent: 36 90% 55%;
+  --accent-foreground: 24 50% 12%;
+  --destructive: 0 84.2% 60.2%;
+  --destructive-foreground: 0 0% 98%;
+  --border: 24 15% 25%;
+  --input: 24 15% 25%;
+  --ring: 18 85% 50%;
+  --radius: 1rem;
+
   /* Brand Colors */
   --c-saffron:      #E8531A;   /* primary */
   --c-saffron-deep: #C4410E;

@@ -28,6 +28,7 @@ if MOCK_MODE:
 _client: Client | None = None
 _mock_sessions = {}
 _mock_submissions = {}
+_session_languages = {}
 
 
 def get_client() -> Client:
@@ -41,9 +42,11 @@ def get_client() -> Client:
 # Session operations
 # ---------------------------------------------------------------------------
 
-def create_session(session_id: str) -> dict:
+def create_session(session_id: str, language: str = "ta") -> dict:
     """Create a new session row in Supabase (or in-memory mock)."""
     now = datetime.now(timezone.utc).isoformat()
+    _session_languages[session_id] = language
+
     data = {
         "id": session_id,
         "state": "GREETING",
@@ -55,27 +58,63 @@ def create_session(session_id: str) -> dict:
         "updated_at": now,
     }
     if MOCK_MODE:
+        data["language"] = language
         _mock_sessions[session_id] = data.copy()
         return data
 
     client = get_client()
-    result = client.table("sessions").insert(data).execute()
-    return result.data[0] if result.data else data
+    # Try inserting with language column first; fallback if schema doesn't have it yet
+    try:
+        db_payload = {**data, "language": language}
+        result = client.table("sessions").insert(db_payload).execute()
+        ret = result.data[0] if result.data else db_payload
+        ret["language"] = language
+        return ret
+    except Exception as e:
+        # Schema might not have 'language' column yet
+        try:
+            result = client.table("sessions").insert(data).execute()
+            ret = result.data[0] if result.data else data
+            ret["language"] = language
+            return ret
+        except Exception as inner_e:
+            print(f"[SUPABASE] insert failed ({inner_e}), using in-memory session")
+            data["language"] = language
+            _mock_sessions[session_id] = data.copy()
+            return data
 
 
 def get_session(session_id: str) -> dict | None:
     """Fetch a session by ID."""
+    lang = _session_languages.get(session_id, "ta")
     if MOCK_MODE:
-        return _mock_sessions.get(session_id)
+        ret = _mock_sessions.get(session_id)
+        if ret:
+            ret["language"] = lang
+        return ret
 
-    client = get_client()
-    result = client.table("sessions").select("*").eq("id", session_id).execute()
-    return result.data[0] if result.data else None
+    try:
+        client = get_client()
+        result = client.table("sessions").select("*").eq("id", session_id).execute()
+        if result.data:
+            row = result.data[0]
+            row["language"] = row.get("language") or lang
+            return row
+    except Exception as e:
+        print(f"[SUPABASE] get_session failed ({e})")
+
+    ret = _mock_sessions.get(session_id)
+    if ret:
+        ret["language"] = lang
+    return ret
 
 
 def update_session(session_id: str, updates: dict) -> dict:
     """Update session fields."""
     updates["updated_at"] = datetime.now(timezone.utc).isoformat()
+    if "language" in updates:
+        _session_languages[session_id] = updates["language"]
+
     if MOCK_MODE:
         if session_id in _mock_sessions:
             _mock_sessions[session_id].update(updates)
@@ -83,14 +122,27 @@ def update_session(session_id: str, updates: dict) -> dict:
         return updates
 
     client = get_client()
-    result = client.table("sessions").update(updates).eq("id", session_id).execute()
-    return result.data[0] if result.data else updates
+    try:
+        result = client.table("sessions").update(updates).eq("id", session_id).execute()
+        return result.data[0] if result.data else updates
+    except Exception as e:
+        # Strip language if column does not exist
+        db_updates = {k: v for k, v in updates.items() if k != "language"}
+        try:
+            result = client.table("sessions").update(db_updates).eq("id", session_id).execute()
+            return result.data[0] if result.data else updates
+        except Exception as inner_e:
+            print(f"[SUPABASE] update_session fallback failed ({inner_e})")
+            if session_id in _mock_sessions:
+                _mock_sessions[session_id].update(updates)
+            return updates
 
 
 def session_to_dict(session_data) -> dict:
     """Convert a SessionData pydantic model to a dict for Supabase."""
     return {
         "state": session_data.state.value,
+        "language": getattr(session_data, "language", "ta") or "ta",
         "slots": {
             k: {
                 "value": v.value,
@@ -110,6 +162,9 @@ def dict_to_session_data(data: dict):
     """Convert a Supabase row dict back to a SessionData object."""
     from models.schemas import SessionData, SlotInfo, ConversationState
 
+    session_id = data["id"]
+    lang = data.get("language") or _session_languages.get(session_id, "ta")
+
     slots_raw = data.get("slots", {})
     slots = {
         k: SlotInfo(
@@ -122,8 +177,9 @@ def dict_to_session_data(data: dict):
     }
 
     return SessionData(
-        id=data["id"],
+        id=session_id,
         state=ConversationState(data.get("state", "GREETING")),
+        language=lang,
         slots=slots,
         current_slot_index=data.get("current_slot_index", 0),
         confirmation_index=data.get("confirmation_index", 0),
@@ -158,41 +214,10 @@ def create_submission(session_id: str, form_data: dict) -> str:
         _mock_submissions[ref] = data
         return ref
 
-    client = get_client()
-    client.table("submissions").insert(data).execute()
+    try:
+        client = get_client()
+        client.table("submissions").insert(data).execute()
+    except Exception as e:
+        print(f"[SUPABASE] create_submission failed ({e}), saving in memory")
+        _mock_submissions[ref] = data
     return ref
-
-
-# ---------------------------------------------------------------------------
-# Supabase SQL schema (run this in Supabase SQL Editor)
-# ---------------------------------------------------------------------------
-
-SUPABASE_SCHEMA_SQL = """
--- Run this in your Supabase SQL Editor
-
-CREATE TABLE IF NOT EXISTS sessions (
-    id UUID PRIMARY KEY,
-    state TEXT NOT NULL DEFAULT 'GREETING',
-    slots JSONB NOT NULL DEFAULT '{}',
-    current_slot_index INTEGER NOT NULL DEFAULT 0,
-    confirmation_index INTEGER NOT NULL DEFAULT 0,
-    retry_count INTEGER NOT NULL DEFAULT 0,
-    created_at TIMESTAMPTZ DEFAULT now(),
-    updated_at TIMESTAMPTZ DEFAULT now()
-);
-
-CREATE TABLE IF NOT EXISTS submissions (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    session_id UUID REFERENCES sessions(id),
-    reference_number TEXT NOT NULL,
-    form_data JSONB NOT NULL,
-    submitted_at TIMESTAMPTZ DEFAULT now()
-);
-
--- Enable Row Level Security (allow all for now — tighten for production)
-ALTER TABLE sessions ENABLE ROW LEVEL SECURITY;
-ALTER TABLE submissions ENABLE ROW LEVEL SECURITY;
-
-CREATE POLICY "Allow all sessions" ON sessions FOR ALL USING (true);
-CREATE POLICY "Allow all submissions" ON submissions FOR ALL USING (true);
-"""

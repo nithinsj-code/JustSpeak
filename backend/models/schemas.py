@@ -22,6 +22,7 @@ class SlotInfo(BaseModel):
 class SessionData(BaseModel):
     id: str
     state: ConversationState = ConversationState.GREETING
+    language: str = "ta"  # "ta" | "en"
     slots: dict[str, SlotInfo] = {}
     current_slot_index: int = 0
     confirmation_index: int = 0  # which slot we're confirming
@@ -34,6 +35,7 @@ class StartSessionResponse(BaseModel):
     session_id: str
     audio_base64: str          # base64-encoded greeting audio
     state: str
+    language: str = "ta"
 
 
 class TurnRequest(BaseModel):
@@ -46,6 +48,7 @@ class TurnResponse(BaseModel):
     transcript: str            # user's transcribed speech (debug only)
     agent_text: str            # agent's text response (debug only)
     state: str
+    language: str = "ta"
     current_slot: Optional[str]
     slots: dict[str, Any]
     confidence: Optional[str]
@@ -60,6 +63,7 @@ class SubmitResponse(BaseModel):
 class DebugResponse(BaseModel):
     session_id: str
     state: str
+    language: str = "ta"
     current_slot: Optional[str]
     slots: dict[str, Any]
     retry_count: int
