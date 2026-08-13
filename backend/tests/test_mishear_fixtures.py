@@ -13,6 +13,9 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -94,10 +97,11 @@ async def run_text_fixture_test(fixture: dict) -> dict:
     Simulate STT by sending the transcript text directly to the LLM extraction.
     In real usage, audio bytes would be sent.
     """
-    import google.generativeai as genai
+    from google import genai
+    from google.genai import types
 
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-    genai.configure(api_key=GEMINI_API_KEY)
+    client = genai.Client(api_key=GEMINI_API_KEY)
 
     system_prompt = f"""You are a Tamil speech recognition and form data extraction assistant.
 The user's spoken transcription is provided. Extract the value for the field.
@@ -120,10 +124,10 @@ Rules:
 Current field: {fixture['slot_key']}
 """
 
-    model = genai.GenerativeModel("gemini-2.5-flash")
-    response = model.generate_content(
-        [system_prompt, f"User said: {fixture['transcript']}"],
-        generation_config=genai.GenerationConfig(
+    response = client.models.generate_content(
+        model="gemini-flash-latest",
+        contents=[system_prompt, f"User said: {fixture['transcript']}"],
+        config=types.GenerateContentConfig(
             response_mime_type="application/json",
             temperature=0.1,
         ),
@@ -179,6 +183,9 @@ async def run_all_fixtures():
         except Exception as e:
             print(f"    ❌ ERROR — {e}")
             failed += 1
+
+        # Rate limit protection (free tier is 5 RPM)
+        await asyncio.sleep(4)
 
     print("\n" + "=" * 60)
     print(f"Results: {passed} passed, {failed} failed out of {len(TEXT_FIXTURES)} fixtures")

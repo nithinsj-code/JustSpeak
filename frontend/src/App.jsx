@@ -17,8 +17,7 @@ import DebugPanel   from './components/DebugPanel'
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 
 // ─── Audio Recording Helpers ─────────────────────────────────
-async function startRecording(mediaRecorderRef, chunksRef) {
-  const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+async function startRecording(stream, mediaRecorderRef, chunksRef) {
   const recorder = new MediaRecorder(stream, { mimeType: 'audio/webm' })
   chunksRef.current = []
   recorder.ondataavailable = (e) => {
@@ -26,7 +25,6 @@ async function startRecording(mediaRecorderRef, chunksRef) {
   }
   recorder.start()
   mediaRecorderRef.current = recorder
-  return stream
 }
 
 function stopRecording(mediaRecorderRef, streamRef) {
@@ -48,7 +46,7 @@ export default function App() {
   // App state machine
   const [appState, setAppState]       = useState('idle')     // idle|listening|thinking|speaking
   const [sessionId, setSessionId]     = useState(null)
-  const [agentMessage, setAgentMessage] = useState('வணக்கம்! தொட்டு பேசுங்கள்.')
+  const [agentMessage, setAgentMessage] = useState('Hello! Tap to speak.')
   const [audioB64, setAudioB64]       = useState(null)
   const [started, setStarted]         = useState(false)
   const [done, setDone]               = useState(false)
@@ -79,10 +77,13 @@ export default function App() {
     if (started) return
     setStarted(true)
     setAppState('thinking')
-    setAgentMessage('இணைக்கிறேன்...')
+    setAgentMessage('Connecting...')
 
     try {
       const res = await fetch(`${API_BASE}/session/start`, { method: 'POST' })
+      if (!res.ok) {
+        throw new Error(`Server returned ${res.status}`)
+      }
       const data = await res.json()
 
       setSessionId(data.session_id)
@@ -91,7 +92,7 @@ export default function App() {
       setAppState('speaking')
     } catch (err) {
       console.error('[startSession]', err)
-      setAgentMessage('இணைப்பு தோல்வி. மீண்டும் முயற்சிக்கவும்.')
+      setAgentMessage('Connection failed. Please try again.')
       setAppState('idle')
       setStarted(false)
     }
@@ -107,15 +108,14 @@ export default function App() {
     if (appState !== 'idle') return
 
     try {
-      streamRef.current = await navigator.mediaDevices
-        .getUserMedia({ audio: true })
-        .then((s) => s)
-      await startRecording(mediaRecorderRef, chunksRef)
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      streamRef.current = stream
+      await startRecording(stream, mediaRecorderRef, chunksRef)
       setAppState('listening')
-      setAgentMessage('கேட்கிறேன்...')
+      setAgentMessage('Listening...')
     } catch (err) {
       console.error('[mic] Permission denied:', err)
-      setAgentMessage('மைக்ரோஃபோன் அனுமதி தேவை.')
+      setAgentMessage('Microphone permission is required.')
     }
   }, [appState, sessionId, startSession])
 
@@ -123,7 +123,7 @@ export default function App() {
   const handleMicEnd = useCallback(async () => {
     if (appState !== 'listening') return
     setAppState('thinking')
-    setAgentMessage('யோசிக்கிறேன்...')
+    setAgentMessage('Thinking...')
 
     await stopRecording(mediaRecorderRef, streamRef)
     const blob = buildAudioBlob(chunksRef)
@@ -136,9 +136,14 @@ export default function App() {
         method: 'POST',
         body: formData,
       })
+
+      if (!res.ok) {
+        throw new Error(`Server returned ${res.status}`)
+      }
+
       const data = await res.json()
 
-      setAgentMessage(data.agent_text)
+      setAgentMessage(data.agent_text || 'Tap to speak your answer.')
       setAudioB64(data.audio_base64)
       setAppState('speaking')
 
@@ -159,7 +164,7 @@ export default function App() {
       }
     } catch (err) {
       console.error('[turn]', err)
-      setAgentMessage('பிழை ஏற்பட்டது. மீண்டும் முயற்சிக்கவும்.')
+      setAgentMessage('An error occurred. Tap to try again.')
       setAppState('idle')
     }
   }, [appState, sessionId])
@@ -185,14 +190,14 @@ export default function App() {
   // ── Audio ended → back to idle ───────────────────────────────
   const handleAudioEnded = useCallback(() => {
     if (done) {
-      setAgentMessage('விண்ணப்பம் வெற்றிகரமாக சமர்ப்பிக்கப்பட்டது! நன்றி.')
+      setAgentMessage('Application submitted successfully! Thank you.')
       setAppState('idle')
       return
     }
     setAppState('idle')
     // Provide a brief prompt hint
     if (sessionId && !done) {
-      setAgentMessage('பதில் சொல்ல தொட்டு பேசுங்கள்.')
+      setAgentMessage('Tap to speak your answer.')
     }
   }, [done, sessionId])
 
@@ -220,7 +225,7 @@ export default function App() {
         {/* Header */}
         <header className="header fade-up-1">
           <h1 className="header-logo">JustSpeak</h1>
-          <p className="header-subtitle">ஒன்று பேசு — முதியோர் நல விண்ணப்பம்</p>
+          <p className="header-subtitle">Voice-First Pension Application</p>
         </header>
 
         <div className="divider" />

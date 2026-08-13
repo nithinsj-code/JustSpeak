@@ -9,63 +9,63 @@ from models.schemas import ConversationState, SessionData, SlotInfo
 SLOT_DEFINITIONS = [
     {
         "key": "full_name",
-        "tamil_question": "உங்கள் முழு பெயரை சொல்லுங்கள்.",
+        "question": "Please tell me your full name.",
         "english_label": "Full Name",
         "validator": lambda v: len(v.strip()) >= 2,
-        "validator_error_ta": "பெயர் சரியாக புரியவில்லை. மீண்டும் சொல்லுங்கள்.",
+        "validator_error": "I didn't catch your name. Please say it again.",
     },
     {
         "key": "age",
-        "tamil_question": "உங்கள் வயது என்ன?",
+        "question": "How old are you?",
         "english_label": "Age",
         "validator": lambda v: v.isdigit() and 60 <= int(v) <= 120,
-        "validator_error_ta": "பென்ஷன் திட்டத்திற்கு வயது 60 அல்லது அதிகமாக இருக்க வேண்டும். மீண்டும் சொல்லுங்கள்.",
+        "validator_error": "You must be 60 years or older for this pension scheme. Please tell me your age again.",
     },
     {
         "key": "gender",
-        "tamil_question": "நீங்கள் ஆண் (male) அல்லது பெண் (female)?",
+        "question": "Are you male or female?",
         "english_label": "Gender",
-        "validator": lambda v: v.lower() in ["male", "female", "ஆண்", "பெண்", "man", "woman"],
-        "validator_error_ta": "பாலினம் புரியவில்லை. ஆண் அல்லது பெண் என்று சொல்லுங்கள்.",
+        "validator": lambda v: v.lower() in ["male", "female", "man", "woman"],
+        "validator_error": "I didn't understand. Please say male or female.",
     },
     {
         "key": "aadhaar_last4",
-        "tamil_question": "உங்கள் ஆதார் அட்டையின் கடைசி நான்கு இலக்கங்களை சொல்லுங்கள்.",
+        "question": "Please tell me the last four digits of your Aadhaar card.",
         "english_label": "Aadhaar Last 4 Digits",
         "validator": lambda v: len(v.replace(" ", "")) == 4 and v.replace(" ", "").isdigit(),
-        "validator_error_ta": "நான்கு இலக்கங்கள் சரியாக புரியவில்லை. மெதுவாக மீண்டும் சொல்லுங்கள்.",
+        "validator_error": "I need exactly four digits. Please say them slowly.",
     },
     {
         "key": "village_district",
-        "tamil_question": "நீங்கள் எந்த கிராமம் அல்லது மாவட்டத்தில் வசிக்கிறீர்கள்?",
+        "question": "Which village or district do you live in?",
         "english_label": "Village / District",
         "validator": lambda v: len(v.strip()) >= 2,
-        "validator_error_ta": "இடம் புரியவில்லை. மீண்டும் சொல்லுங்கள்.",
+        "validator_error": "I didn't catch the location. Please say it again.",
     },
     {
         "key": "has_bank_account",
-        "tamil_question": "உங்களுக்கு வங்கி கணக்கு உள்ளதா? ஆம் அல்லது இல்லை என்று சொல்லுங்கள்.",
+        "question": "Do you have a bank account? Please say yes or no.",
         "english_label": "Has Bank Account",
-        "validator": lambda v: v.lower() in ["yes", "no", "ஆம்", "இல்லை", "உள்ளது", "இல்லை"],
-        "validator_error_ta": "ஆம் அல்லது இல்லை என்று சொல்லுங்கள்.",
+        "validator": lambda v: v.lower() in ["yes", "no"],
+        "validator_error": "Please say yes or no.",
     },
     {
         "key": "monthly_income_band",
-        "tamil_question": "உங்கள் மாத வருமானம் எவ்வளவு? ஆயிரத்திற்கும் குறைவா, ஆயிரம் முதல் இரண்டாயிரம் வரையா, அல்லது இரண்டாயிரத்திற்கும் அதிகமா?",
+        "question": "What is your monthly income? Is it less than a thousand, between one thousand and two thousand, or more than two thousand?",
         "english_label": "Monthly Income Band",
         "validator": lambda v: len(v.strip()) >= 1,
-        "validator_error_ta": "வருமானம் புரியவில்லை. மீண்டும் சொல்லுங்கள்.",
+        "validator_error": "I didn't understand your income. Please say it again.",
     },
     {
         "key": "phone_number",
-        "tamil_question": "உங்கள் தொலைபேசி எண் என்ன? (விரும்பினால் மட்டும் சொல்லுங்கள், வேண்டாம் என்றால் 'தேவையில்லை' என்று சொல்லுங்கள்)",
+        "question": "What is your phone number? This is optional — say 'skip' if you don't want to provide one.",
         "english_label": "Phone Number (Optional)",
         "validator": lambda v: True,  # optional — always accept
-        "validator_error_ta": "",
+        "validator_error": "",
     },
 ]
 
-MAX_RETRIES = 2
+MAX_RETRIES = 4
 
 
 def get_slot_definition(slot_key: str) -> dict:
@@ -133,16 +133,20 @@ def build_confirmation_summary(session: SessionData) -> list[dict]:
             summary.append({
                 "key": key,
                 "label": slot_def["english_label"],
-                "value": "தவிர்க்கப்பட்டது (skipped)",
+                "value": "Skipped",
             })
     return summary
 
 
 def process_intent_capture(user_text: str) -> bool:
     """Return True if user confirmed intent to apply for pension."""
-    affirm_words = ["ஆம்", "ஆமா", "yes", "சரி", "வேண்டும்", "apply", "ok", "okay", "ha", "haan"]
+    if not user_text or not user_text.strip():
+        return True  # default to True if user spoke during greeting/intent
+    deny_words = ["no", "don't", "dont", "stop", "cancel", "not", "nope", "nah"]
     lower = user_text.lower()
-    return any(w in lower for w in affirm_words)
+    if any(w in lower for w in deny_words):
+        return False
+    return True
 
 
 def process_confirmation_response(user_text: str) -> str:
@@ -151,9 +155,9 @@ def process_confirmation_response(user_text: str) -> str:
     'repeat' if they want it repeated.
     """
     lower = user_text.lower()
-    affirm = ["ஆம்", "ஆமா", "yes", "சரி", "correct", "ok", "okay", "right", "ha"]
-    deny = ["இல்லை", "no", "தவறு", "wrong", "incorrect", "not right", "மாற்று"]
-    repeat = ["மீண்டும்", "repeat", "again", "கேட்க", "படிக்க"]
+    affirm = ["yes", "yeah", "correct", "ok", "okay", "right", "sure", "yep", "yup"]
+    deny = ["no", "wrong", "incorrect", "not right", "change", "fix", "nope"]
+    repeat = ["repeat", "again", "say again", "one more time", "pardon"]
     if any(w in lower for w in repeat):
         return "repeat"
     if any(w in lower for w in deny):

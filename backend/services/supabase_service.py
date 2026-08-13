@@ -3,6 +3,8 @@ Supabase service — session persistence and submission logging.
 """
 
 import os
+import random
+import string
 from datetime import datetime, timezone
 
 from dotenv import load_dotenv
@@ -13,7 +15,19 @@ load_dotenv()
 SUPABASE_URL = os.getenv("SUPABASE_URL", "")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
 
+MOCK_MODE = (
+    not SUPABASE_URL
+    or not SUPABASE_KEY
+    or "your-project-id" in SUPABASE_URL
+    or "your_supabase_anon_key" in SUPABASE_KEY
+)
+
+if MOCK_MODE:
+    print("[SUPABASE] Running in MOCK MODE (using in-memory db)")
+
 _client: Client | None = None
+_mock_sessions = {}
+_mock_submissions = {}
 
 
 def get_client() -> Client:
@@ -28,8 +42,7 @@ def get_client() -> Client:
 # ---------------------------------------------------------------------------
 
 def create_session(session_id: str) -> dict:
-    """Create a new session row in Supabase."""
-    client = get_client()
+    """Create a new session row in Supabase (or in-memory mock)."""
     now = datetime.now(timezone.utc).isoformat()
     data = {
         "id": session_id,
@@ -41,12 +54,20 @@ def create_session(session_id: str) -> dict:
         "created_at": now,
         "updated_at": now,
     }
+    if MOCK_MODE:
+        _mock_sessions[session_id] = data.copy()
+        return data
+
+    client = get_client()
     result = client.table("sessions").insert(data).execute()
     return result.data[0] if result.data else data
 
 
 def get_session(session_id: str) -> dict | None:
     """Fetch a session by ID."""
+    if MOCK_MODE:
+        return _mock_sessions.get(session_id)
+
     client = get_client()
     result = client.table("sessions").select("*").eq("id", session_id).execute()
     return result.data[0] if result.data else None
@@ -54,8 +75,14 @@ def get_session(session_id: str) -> dict | None:
 
 def update_session(session_id: str, updates: dict) -> dict:
     """Update session fields."""
-    client = get_client()
     updates["updated_at"] = datetime.now(timezone.utc).isoformat()
+    if MOCK_MODE:
+        if session_id in _mock_sessions:
+            _mock_sessions[session_id].update(updates)
+            return _mock_sessions[session_id]
+        return updates
+
+    client = get_client()
     result = client.table("sessions").update(updates).eq("id", session_id).execute()
     return result.data[0] if result.data else updates
 
@@ -110,9 +137,6 @@ def dict_to_session_data(data: dict):
 # Submission operations
 # ---------------------------------------------------------------------------
 
-import random
-import string
-
 
 def generate_reference_number() -> str:
     """Generate a unique reference number like JS-2024-A7X9."""
@@ -123,7 +147,6 @@ def generate_reference_number() -> str:
 
 def create_submission(session_id: str, form_data: dict) -> str:
     """Write the final submission to Supabase. Returns reference number."""
-    client = get_client()
     ref = generate_reference_number()
     data = {
         "session_id": session_id,
@@ -131,6 +154,11 @@ def create_submission(session_id: str, form_data: dict) -> str:
         "form_data": form_data,
         "submitted_at": datetime.now(timezone.utc).isoformat(),
     }
+    if MOCK_MODE:
+        _mock_submissions[ref] = data
+        return ref
+
+    client = get_client()
     client.table("submissions").insert(data).execute()
     return ref
 

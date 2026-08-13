@@ -16,7 +16,10 @@ export default function AudioPlayer({ audioBase64, onEnded }) {
       byteNums[i] = byteChars.charCodeAt(i)
     }
     const byteArray = new Uint8Array(byteNums)
-    const blob = new Blob([byteArray], { type: 'audio/wav' })
+    // Sniff audio format or allow browser auto-detection
+    const isWav = byteArray[0] === 82 && byteArray[1] === 73 && byteArray[2] === 70 && byteArray[3] === 70 // 'RIFF'
+    const mimeType = isWav ? 'audio/wav' : 'audio/mpeg'
+    const blob = new Blob([byteArray], { type: mimeType })
     const url = URL.createObjectURL(blob)
 
     audioRef.current.src = url

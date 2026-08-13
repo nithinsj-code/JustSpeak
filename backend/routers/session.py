@@ -64,7 +64,7 @@ async def process_turn(
     # Load session
     session_row = db.get_session(session_id)
     if not session_row:
-        raise HTTPException(status_code=404, detail="Session not found")
+        session_row = db.create_session(session_id)
 
     session = db.dict_to_session_data(session_row)
 
@@ -83,25 +83,16 @@ async def process_turn(
         raise HTTPException(status_code=400, detail="Provide either audio or text_input")
 
     # =========================================================================
-    # STATE: GREETING → INTENT_CAPTURE
+    # STATE: GREETING / INTENT_CAPTURE
     # =========================================================================
-    if session.state == ConversationState.GREETING:
-        # Transition to INTENT_CAPTURE, ask for confirmation
-        session.state = ConversationState.INTENT_CAPTURE
-        agent_text = gemini.INTENT_CONFIRM_TEXT
-        audio_out = await gemini.synthesize_speech(agent_text)
-
-    # =========================================================================
-    # STATE: INTENT_CAPTURE
-    # =========================================================================
-    elif session.state == ConversationState.INTENT_CAPTURE:
+    if session.state in (ConversationState.GREETING, ConversationState.INTENT_CAPTURE):
         if audio_bytes:
             result = await gemini.transcribe_and_extract(
                 audio_bytes, "intent", "Does user want to apply for old age pension?", mime_type
             )
-            transcript = result["transcript"]
-            extracted_value = result["extracted_value"]
-            confidence = result["confidence"]
+            transcript = result.get("transcript", "")
+            extracted_value = result.get("value") or result.get("extracted_value", "")
+            confidence = result.get("confidence", "low")
         else:
             extracted_value = transcript
 
@@ -110,9 +101,9 @@ async def process_turn(
             session.state = ConversationState.SLOT_FILLING
             session.current_slot_index = 0
             slot_def = sm.get_current_slot_def(session)
-            agent_text = slot_def["tamil_question"] if slot_def else "ஆரம்பிக்கலாம்."
+            agent_text = f"Great. {slot_def['question']}" if slot_def else "Let's begin."
         else:
-            agent_text = "சரி, வேறு ஏதாவது உதவி வேண்டுமா?"
+            agent_text = "Okay, feel free to come back whenever you need help. Thank you!"
 
         audio_out = await gemini.synthesize_speech(agent_text)
 
@@ -135,22 +126,23 @@ async def process_turn(
                 result = await gemini.transcribe_and_extract(
                     audio_bytes,
                     current_slot_key,
-                    current_slot_def["tamil_question"],
+                    current_slot_def["question"],
                     mime_type,
                 )
-                transcript = result["transcript"]
-                extracted_value = result["extracted_value"]
-                confidence = result["confidence"]
+                transcript = result.get("transcript", "")
+                extracted_value = result.get("value") or result.get("extracted_value", "")
+                confidence = result.get("confidence", "low")
             else:
                 extracted_value = transcript
 
+            print(f"[TURN] Slot '{current_slot_key}': transcript='{transcript}', extracted='{extracted_value}', confidence='{confidence}'")
             slot_info = session.slots.get(current_slot_key, SlotInfo())
 
             # Check for skip offer acceptance
             if slot_info.attempts >= sm.MAX_RETRIES:
                 # Was already in skip-offer mode — check if user said yes/no
                 lower = (extracted_value or transcript).lower()
-                if any(w in lower for w in ["ஆம்", "yes", "சரி", "skip", "தவிர்"]):
+                if any(w in lower for w in ["yes", "yeah", "sure", "ok", "skip"]):
                     slot_info.skipped = True
                     slot_info.attempts += 1
                     session.slots[current_slot_key] = slot_info
@@ -161,44 +153,48 @@ async def process_turn(
                         agent_text = gemini.CONFIRMATION_START_TEXT
                     else:
                         next_def = sm.get_current_slot_def(session)
-                        agent_text = next_def["tamil_question"] if next_def else gemini.CONFIRMATION_START_TEXT
+                        agent_text = next_def["question"] if next_def else gemini.CONFIRMATION_START_TEXT
                     audio_out = await gemini.synthesize_speech(agent_text)
                 else:
                     # Retry once more
                     slot_info.attempts += 1
                     session.slots[current_slot_key] = slot_info
-                    agent_text = gemini.build_low_confidence_retry_text(current_slot_def["tamil_question"])
+                    agent_text = gemini.build_low_confidence_retry_text(current_slot_def["question"])
                     audio_out = await gemini.synthesize_speech(agent_text)
-            elif confidence == "low" or not sm.validate_slot_value(current_slot_key, extracted_value or ""):
-                # Low confidence or validation failure
-                slot_info.attempts += 1
-                slot_info.confidence = "low"
-                session.slots[current_slot_key] = slot_info
-
-                if slot_info.attempts >= sm.MAX_RETRIES:
-                    agent_text = gemini.build_skip_offer_text(current_slot_def["tamil_question"])
-                else:
-                    agent_text = current_slot_def.get(
-                        "validator_error_ta",
-                        gemini.build_low_confidence_retry_text(current_slot_def["tamil_question"]),
-                    )
-                audio_out = await gemini.synthesize_speech(agent_text)
             else:
-                # High confidence + valid → save and move on
-                slot_info.value = extracted_value or transcript
-                slot_info.confidence = "high"
-                slot_info.attempts += 1
-                session.slots[current_slot_key] = slot_info
-                sm.advance_to_next_slot(session)
+                val_to_use = extracted_value or transcript
+                is_valid = sm.validate_slot_value(current_slot_key, val_to_use or "")
 
-                if sm.all_slots_filled(session):
-                    session.state = ConversationState.CONFIRMATION
-                    session.confirmation_index = 0
-                    agent_text = gemini.CONFIRMATION_START_TEXT
+                if not val_to_use or not is_valid:
+                    # Empty or validation failure
+                    slot_info.attempts += 1
+                    slot_info.confidence = "low"
+                    session.slots[current_slot_key] = slot_info
+
+                    if slot_info.attempts >= sm.MAX_RETRIES:
+                        agent_text = gemini.build_skip_offer_text(current_slot_def["question"])
+                    else:
+                        agent_text = current_slot_def.get(
+                            "validator_error",
+                            gemini.build_low_confidence_retry_text(current_slot_def["question"]),
+                        )
+                    audio_out = await gemini.synthesize_speech(agent_text)
                 else:
-                    next_def = sm.get_current_slot_def(session)
-                    agent_text = next_def["tamil_question"] if next_def else gemini.CONFIRMATION_START_TEXT
-                audio_out = await gemini.synthesize_speech(agent_text)
+                    # Valid value → save and move on
+                    slot_info.value = val_to_use
+                    slot_info.confidence = confidence or "high"
+                    slot_info.attempts += 1
+                    session.slots[current_slot_key] = slot_info
+                    sm.advance_to_next_slot(session)
+
+                    if sm.all_slots_filled(session):
+                        session.state = ConversationState.CONFIRMATION
+                        session.confirmation_index = 0
+                        agent_text = gemini.CONFIRMATION_START_TEXT
+                    else:
+                        next_def = sm.get_current_slot_def(session)
+                        agent_text = next_def["question"] if next_def else gemini.CONFIRMATION_START_TEXT
+                    audio_out = await gemini.synthesize_speech(agent_text)
 
     # =========================================================================
     # STATE: CONFIRMATION
@@ -212,8 +208,9 @@ async def process_turn(
             result = await gemini.transcribe_and_extract(
                 audio_bytes, "confirmation", "Did user confirm yes/no/repeat?", mime_type
             )
-            transcript = result["transcript"]
-            response_type = sm.process_confirmation_response(result["extracted_value"] or result["transcript"])
+            transcript = result.get("transcript", "")
+            val = result.get("value") or result.get("extracted_value") or transcript
+            response_type = sm.process_confirmation_response(val)
 
             if response_type == "no":
                 # Find the slot for this confirmation item and go back to slot filling
@@ -231,10 +228,10 @@ async def process_turn(
                     session.state = ConversationState.SLOT_FILLING
                     session.retry_count = 0
                     slot_def = sm.get_slot_definition(slot_key_to_fix)
-                    agent_text = slot_def.get("tamil_question", "மீண்டும் சொல்லுங்கள்.")
+                    agent_text = slot_def.get("question", "Please say it again.")
                     audio_out = await gemini.synthesize_speech(agent_text)
                 else:
-                    agent_text = "மன்னிக்கவும், மீண்டும் ஆரம்பிக்கலாம்."
+                    agent_text = "Sorry, let's start again."
                     audio_out = await gemini.synthesize_speech(agent_text)
 
             elif response_type == "repeat" and idx > 0:
@@ -268,11 +265,11 @@ async def process_turn(
     # STATE: SUBMIT / DONE
     # =========================================================================
     elif session.state in (ConversationState.SUBMIT, ConversationState.DONE):
-        agent_text = "உங்கள் விண்ணப்பம் ஏற்கனவே சமர்ப்பிக்கப்பட்டது. மிக்க நன்றி!"
+        agent_text = "Your application has already been submitted. Thank you!"
         audio_out = await gemini.synthesize_speech(agent_text)
 
     else:
-        agent_text = "மன்னிக்கவும், மீண்டும் முயற்சிக்கவும்."
+        agent_text = "Sorry, please try again."
         audio_out = await gemini.synthesize_speech(agent_text)
 
     # Persist session

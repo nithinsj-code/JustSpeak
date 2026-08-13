@@ -6,52 +6,77 @@ Uses a single GEMINI_API_KEY for everything.
 import base64
 import json
 import os
+import re
+import struct
+from io import BytesIO
 
+from dotenv import load_dotenv
 from google import genai
 from google.genai import types
-from dotenv import load_dotenv
+
+try:
+    from gtts import gTTS  # type: ignore # pyrefly: ignore [missing-import]
+except ImportError:
+    gTTS = None
 
 load_dotenv()
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-client = genai.Client(api_key=GEMINI_API_KEY)
+MOCK_MODE = not GEMINI_API_KEY or "your_gemini_api_key" in GEMINI_API_KEY
+
+if MOCK_MODE:
+    print("[GEMINI] Running in MOCK MODE (using stub responses)")
+    client = None
+else:
+    client = genai.Client(api_key=GEMINI_API_KEY)
 
 # Model IDs
-STT_LLM_MODEL  = "gemini-2.5-flash"
+STT_LLM_MODEL  = "gemini-2.0-flash"
 TTS_MODEL      = "gemini-2.5-flash-preview-tts"
-DIALOGUE_MODEL = "gemini-2.5-flash"
+DIALOGUE_MODEL = "gemini-2.0-flash"
 
 
 # ---------------------------------------------------------------------------
 # STT + Slot Extraction (single call: audio → JSON)
 # ---------------------------------------------------------------------------
 
-STT_EXTRACT_SYSTEM = """You are a Tamil speech recognition and form data extraction assistant.
-The user is a non-literate elderly Tamil speaker applying for the Tamil Nadu Old Age Pension Scheme.
+STT_EXTRACT_SYSTEM = """You are an English speech recognition and form data extraction assistant.
+The user is applying for the Old Age Pension Scheme via a voice-first application.
 
 You will receive an audio clip of the user's spoken response and context about what field is being collected.
 
-Return ONLY a valid JSON object with these exact fields:
-{
-  "transcript": "<verbatim Tamil/English transcription of what was said>",
-  "extracted_value": "<the clean extracted value for the field, normalized>",
-  "confidence": "high or low",
-  "reasoning": "<brief English explanation of your confidence>"
-}
+Return ONLY a valid JSON object (no markdown, no code fences) with these exact fields:
+{{
+  "transcript": "<verbatim English transcription of what was said>",
+  "value": "<the clean extracted value for the field, normalized>",
+  "confidence": "high or low"
+}}
 
 Rules:
 - confidence = "high" if you clearly understood the spoken value and it fits the expected field
 - confidence = "low" if audio was unclear, ambiguous, noisy, or value does not make sense for the field
-- For age: extract only the number (e.g., "அறுபத்தைந்து" → "65")
-- For aadhaar_last4: extract exactly 4 digits (e.g., "ஐந்து ஆறு ஏழு எட்டு" → "5678")
-- For gender: normalize to "male" or "female"
-- For has_bank_account: normalize to "yes" or "no"
-- For phone_number: if user says "தேவையில்லை" or "no", extracted_value = "skip"
-- Never guess if confidence is low — return low and the raw transcript
+- For intent: if user says "yes", "yeah", "sure", "ok", "apply", "I want to apply", or expresses willingness, set value = "yes" and confidence = "high".
+- For full_name: extract the spoken person name (e.g., "My name is Sachin" → "Sachin", "John Smith" → "John Smith"). Always set confidence = "high" if any name is spoken.
+- For village_district: extract the location name. Always set confidence = "high" if any location is spoken.
+- For age: extract only the numeric digits (e.g., "sixty five" → "65", "I am 72" → "72"). If age is < 60 or ambiguous, set confidence = "low".
+- For aadhaar_last4: extract exactly 4 digits (e.g., "five six seven eight" → "5678", "1 2 3 4" → "1234").
+- For gender: normalize to "male" or "female".
+- For has_bank_account: normalize to "yes" or "no".
+- For phone_number: if user says "no", "skip", "don't have one", or "not needed", set value = "skip" and confidence = "high".
+- For monthly_income_band: extract/summarize income description into clean text.
+- Never guess if confidence is low — return low and the raw transcript.
 
 Current field being collected: {slot_key}
 Field description: {slot_description}
 """
+
+
+def _clean_json_response(text: str) -> str:
+    """Strip markdown code fences from Gemini response if present."""
+    # Remove ```json ... ``` wrapping
+    cleaned = re.sub(r"^```(?:json)?\s*\n?", "", text.strip())
+    cleaned = re.sub(r"\n?```\s*$", "", cleaned)
+    return cleaned.strip()
 
 
 async def transcribe_and_extract(
@@ -62,8 +87,30 @@ async def transcribe_and_extract(
 ) -> dict:
     """
     Send audio to Gemini and extract the slot value + confidence.
-    Returns: { transcript, extracted_value, confidence, reasoning }
+    Returns: { transcript, value, confidence }
     """
+    if MOCK_MODE:
+        mock_values = {
+            "intent": ("I want to apply", "yes"),
+            "full_name": ("My name is John", "John"),
+            "age": ("I am sixty five", "65"),
+            "gender": ("Male", "male"),
+            "aadhaar_last4": ("five six seven eight", "5678"),
+            "village_district": ("Chennai", "Chennai"),
+            "has_bank_account": ("Yes I have a bank account", "yes"),
+            "monthly_income_band": ("Less than a thousand", "Less than 1000"),
+            "phone_number": ("9876543210", "9876543210"),
+            "confirmation": ("Yes", "yes"),
+        }
+        val = mock_values.get(slot_key, ("yes", "yes"))
+        return {"transcript": val[0], "value": val[1], "confidence": "high"}
+
+    print(f"[STT] Processing audio for slot '{slot_key}': {len(audio_bytes)} bytes, mime={mime_type}")
+
+    if len(audio_bytes) < 100:
+        print(f"[STT] WARNING: Audio too small ({len(audio_bytes)} bytes) — likely empty recording")
+        return {"transcript": "", "value": "", "confidence": "low"}
+
     try:
         system_prompt = STT_EXTRACT_SYSTEM.format(
             slot_key=slot_key,
@@ -81,42 +128,61 @@ async def transcribe_and_extract(
             ),
         )
 
-        result = json.loads(response.text)
-        return {
-            "transcript":       result.get("transcript", ""),
-            "extracted_value":  result.get("extracted_value", ""),
-            "confidence":       result.get("confidence", "low"),
-            "reasoning":        result.get("reasoning", ""),
-        }
+        raw_text = response.text
+        print(f"[STT] Raw response for '{slot_key}': {repr(raw_text[:300])}")
+
+        # Try parsing the JSON response
+        cleaned = _clean_json_response(raw_text)
+        try:
+            result = json.loads(cleaned)
+        except json.JSONDecodeError:
+            # Aggressive fallback: try to find JSON object in the text
+            print(f"[STT] JSON parse failed, attempting regex extraction...")
+            match = re.search(r'\{[^{}]*\}', raw_text, re.DOTALL)
+            if match:
+                result = json.loads(match.group())
+            else:
+                # Last resort: treat entire raw text as the transcript
+                print(f"[STT] No JSON found. Using raw text as transcript.")
+                return {
+                    "transcript": raw_text.strip(),
+                    "value": raw_text.strip(),
+                    "confidence": "high",
+                }
+
+        transcript = result.get("transcript", "")
+        value = result.get("value", "")
+        confidence = result.get("confidence", "low")
+        print(f"[STT] Parsed for '{slot_key}': transcript='{transcript}', value='{value}', confidence='{confidence}'")
+
+        return {"transcript": transcript, "value": value, "confidence": confidence}
 
     except Exception as e:
-        return {
-            "transcript":      "",
-            "extracted_value": "",
-            "confidence":      "low",
-            "reasoning":       f"Error: {str(e)}",
-        }
+        print(f"[STT] transcribe_and_extract ERROR for slot '{slot_key}': {type(e).__name__}: {e}")
+        return {"transcript": "", "value": "", "confidence": "low"}
 
 
 # ---------------------------------------------------------------------------
 # LLM Dialogue Generation
 # ---------------------------------------------------------------------------
 
-DIALOGUE_SYSTEM = """You are JustSpeak (ஒன்று பேசு), a kind and patient voice assistant helping
-elderly Tamil-speaking users apply for the Tamil Nadu Old Age Pension Scheme.
+DIALOGUE_SYSTEM = """You are JustSpeak, a kind and patient voice assistant helping
+users apply for the Old Age Pension Scheme.
 
-Generate natural, warm, simple Tamil responses suitable for:
-- A non-literate elderly person who may be nervous
-- Being spoken aloud (not read) — use conversational Tamil, not formal written Tamil
+Generate natural, warm, simple English responses suitable for:
+- An elderly person who may be nervous
+- Being spoken aloud (not read) — use conversational English
 - Being concise — 1-3 sentences maximum
 - Being clear and slow — avoid complex vocabulary
 
-Always respond in Tamil script unless the context specifically asks for English.
+Always respond in English.
 """
 
 
 async def generate_agent_response(prompt: str) -> str:
-    """Generate a Tamil dialogue response for the given situation."""
+    """Generate an English dialogue response for the given situation."""
+    if MOCK_MODE:
+        return "Sorry, please wait a moment (Mock response)."
     try:
         response = client.models.generate_content(
             model=DIALOGUE_MODEL,
@@ -128,7 +194,7 @@ async def generate_agent_response(prompt: str) -> str:
         )
         return response.text.strip()
     except Exception as e:
-        return "மன்னிக்கவும், சிறிது நேரம் காத்திருங்கள்."
+        return "Sorry, please wait a moment."
 
 
 # ---------------------------------------------------------------------------
@@ -136,38 +202,38 @@ async def generate_agent_response(prompt: str) -> str:
 # ---------------------------------------------------------------------------
 
 GREETING_TEXT = (
-    "வணக்கம்! நான் ஒன்று பேசு. "
-    "இன்று நாம் உங்களுக்கு முதியோர் நல உதவித்தொகை விண்ணப்பம் பூர்த்தி செய்ய உதவுவோம். "
-    "நான் கேள்விகள் கேட்பேன், நீங்கள் பேசினால் போதும். "
-    "ஆரம்பிக்கலாமா?"
+    "Hello! I am JustSpeak. "
+    "Today I will help you fill out the Old Age Pension application. "
+    "I will ask you questions, and you just need to speak. "
+    "Shall we begin?"
 )
 
 INTENT_CONFIRM_TEXT = (
-    "நல்லது. முதியோர் நல உதவித்தொகைக்கு விண்ணப்பிக்க விரும்புகிறீர்களா? "
-    "ஆம் என்று சொல்லுங்கள்."
+    "Great. Would you like to apply for the Old Age Pension? "
+    "Please say yes to continue."
 )
 
-SUBMIT_SUCCESS_PREFIX = "உங்கள் விண்ணப்பம் வெற்றிகரமாக சமர்ப்பிக்கப்பட்டது. உங்கள் குறிப்பு எண்: "
-SUBMIT_SUCCESS_SUFFIX = ". இந்த எண்ணை நினைவில் வைத்துக்கொள்ளுங்கள். மீண்டும் கேட்க வேண்டுமா?"
+SUBMIT_SUCCESS_PREFIX = "Your application has been successfully submitted. Your reference number is: "
+SUBMIT_SUCCESS_SUFFIX = ". Please remember this number. Would you like to hear it again?"
 
-SKIP_OFFER_TEXT = "சரி, இந்த கேள்வியை இப்போது தவிர்க்கலாம். அடுத்த கேள்விக்கு செல்வோம்."
-CONFIRMATION_START_TEXT = "நல்லது, இப்போது நீங்கள் சொன்னதை ஒரு முறை திரும்ப சொல்கிறேன், கவனமாக கேளுங்கள்."
-CONFIRMATION_ALL_DONE_TEXT = "அருமை! எல்லாம் சரி. இப்போது விண்ணப்பம் அனுப்புகிறோம்."
+SKIP_OFFER_TEXT = "Okay, we can skip this question for now. Let's move to the next one."
+CONFIRMATION_START_TEXT = "Alright, let me read back what you told me. Please listen carefully."
+CONFIRMATION_ALL_DONE_TEXT = "Wonderful! Everything looks good. Submitting your application now."
 
 
 def build_confirmation_item_text(label: str, value: str) -> str:
-    return f"{label}: {value}. இது சரிதானா?"
+    return f"{label}: {value}. Is this correct?"
 
 
 def build_low_confidence_retry_text(slot_question: str) -> str:
-    return f"மன்னிக்கவும், சரியாக புரியவில்லை. {slot_question}"
+    return f"Sorry, I didn't quite catch that. {slot_question}"
 
 
 def build_skip_offer_text(slot_question: str) -> str:
     return (
-        "இந்த கேள்விக்கு இரண்டு முறை பதில் புரியவில்லை. "
-        "இதை தவிர்க்க வேண்டுமா? ஆம் என்று சொல்லுங்கள், "
-        "அல்லது மீண்டும் முயற்சிக்க 'மீண்டும்' என்று சொல்லுங்கள்."
+        "I wasn't able to understand your answer after two attempts. "
+        "Would you like to skip this question? Say yes to skip, "
+        "or say 'again' to try once more."
     )
 
 
@@ -175,16 +241,17 @@ def build_skip_offer_text(slot_question: str) -> str:
 # TTS — Gemini 2.5 Flash native audio generation
 # ---------------------------------------------------------------------------
 
-async def synthesize_speech(text: str, lang: str = "ta") -> bytes:
+async def synthesize_speech(text: str, lang: str = "en") -> bytes:
     """
-    Generate TTS audio using Gemini 2.5 Flash TTS.
-    Returns raw PCM/WAV audio bytes.
-    Falls back to a silent WAV on error.
+    Generate TTS audio using Gemini Flash TTS, falling back to gTTS on quota/API errors.
+    Returns PCM/WAV or MP3 audio bytes.
     """
+    if MOCK_MODE:
+        return _generate_silent_wav()
     try:
         response = client.models.generate_content(
             model=TTS_MODEL,
-            contents=text,
+            contents=f"Read aloud verbatim: {text}",
             config=types.GenerateContentConfig(
                 response_modalities=["AUDIO"],
                 speech_config=types.SpeechConfig(
@@ -202,13 +269,21 @@ async def synthesize_speech(text: str, lang: str = "ta") -> bytes:
         return _wrap_pcm_as_wav(audio_data)
 
     except Exception as e:
-        print(f"[TTS] Error: {e}. Returning silent audio.")
-        return _generate_silent_wav()
+        print(f"[TTS] Gemini TTS failed ({e}). Falling back to gTTS...")
+        try:
+            if gTTS is None:
+                raise RuntimeError("gTTS package is not available")
+            fp = BytesIO()
+            tts = gTTS(text=text, lang=lang)
+            tts.write_to_fp(fp)
+            return fp.getvalue()
+        except Exception as gtts_err:
+            print(f"[TTS] gTTS Fallback Error: {gtts_err}. Returning silent audio.")
+            return _generate_silent_wav()
 
 
 def _wrap_pcm_as_wav(pcm_bytes: bytes, sample_rate: int = 24000) -> bytes:
     """Wrap raw 16-bit mono PCM bytes in a WAV container."""
-    import struct
     num_channels   = 1
     bits_per_sample = 16
     byte_rate      = sample_rate * num_channels * bits_per_sample // 8
@@ -236,7 +311,6 @@ def _wrap_pcm_as_wav(pcm_bytes: bytes, sample_rate: int = 24000) -> bytes:
 
 def _generate_silent_wav(duration_ms: int = 500) -> bytes:
     """Minimal silent WAV fallback."""
-    import struct
     sample_rate     = 24000
     num_samples     = int(sample_rate * duration_ms / 1000)
     num_channels    = 1
