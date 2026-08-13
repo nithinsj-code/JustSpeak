@@ -63,15 +63,15 @@ def create_session(session_id: str, language: str = "ta") -> dict:
         return data
 
     client = get_client()
-    # Try inserting with language column first; fallback if schema doesn't have it yet
+    # Try inserting with dynamic columns first; fallback if schema doesn't have it yet
     try:
-        db_payload = {**data, "language": language}
+        db_payload = {**data, "language": language, "dynamic_slots": getattr(data, "dynamic_slots", [])}
         result = client.table("sessions").insert(db_payload).execute()
         ret = result.data[0] if result.data else db_payload
         ret["language"] = language
         return ret
     except Exception as e:
-        # Schema might not have 'language' column yet
+        # Schema might not have 'language' or 'dynamic_slots' column yet
         try:
             result = client.table("sessions").insert(data).execute()
             ret = result.data[0] if result.data else data
@@ -126,8 +126,8 @@ def update_session(session_id: str, updates: dict) -> dict:
         result = client.table("sessions").update(updates).eq("id", session_id).execute()
         return result.data[0] if result.data else updates
     except Exception as e:
-        # Strip language if column does not exist
-        db_updates = {k: v for k, v in updates.items() if k != "language"}
+        # Strip missing columns (language, dynamic_slots) if schema is outdated
+        db_updates = {k: v for k, v in updates.items() if k not in ("language", "dynamic_slots")}
         try:
             result = client.table("sessions").update(db_updates).eq("id", session_id).execute()
             return result.data[0] if result.data else updates
@@ -152,6 +152,7 @@ def session_to_dict(session_data) -> dict:
             }
             for k, v in session_data.slots.items()
         },
+        "dynamic_slots": getattr(session_data, "dynamic_slots", []),
         "current_slot_index": session_data.current_slot_index,
         "confirmation_index": session_data.confirmation_index,
         "retry_count": session_data.retry_count,
@@ -181,11 +182,11 @@ def dict_to_session_data(data: dict):
         state=ConversationState(data.get("state", "GREETING")),
         language=lang,
         slots=slots,
+        dynamic_slots=data.get("dynamic_slots", []),
         current_slot_index=data.get("current_slot_index", 0),
         confirmation_index=data.get("confirmation_index", 0),
         retry_count=data.get("retry_count", 0),
         created_at=data.get("created_at"),
-        updated_at=data.get("updated_at"),
     )
 
 

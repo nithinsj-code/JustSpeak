@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TN e-Sevai - Old Age Pension</title>
+    <style>
+        body { font-family: Arial, sans-serif; background-color: #f4f6f8; margin: 0; padding: 20px; }
+        .container { max-width: 600px; margin: 0 auto; background: white; padding: 30px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); border-top: 5px solid #2563eb; }
+        h1 { font-size: 24px; color: #1e3a8a; margin-top: 0; }
+        .form-group { margin-bottom: 15px; }
+        label { display: block; font-weight: bold; margin-bottom: 5px; font-size: 14px; color: #374151; }
+        input, select { width: 100%; padding: 10px; border: 1px solid #d1d5db; border-radius: 4px; box-sizing: border-box; }
+        button { background-color: #2563eb; color: white; border: none; padding: 12px 20px; border-radius: 4px; cursor: pointer; font-size: 16px; width: 100%; font-weight: bold; }
+        button:hover { background-color: #1d4ed8; }
+        #success-message { display: none; text-align: center; padding: 40px 20px; }
+        #success-message h2 { color: #059669; }
+        .ref-number { font-size: 24px; font-family: monospace; background: #ecfdf5; padding: 10px; border-radius: 8px; display: inline-block; border: 1px dashed #10b981; margin-top: 15px; font-weight: bold;}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div id="form-container">
+            <h1>Official Government Portal</h1>
+            <p style="color: #6b7280; font-size: 14px; margin-bottom: 25px;">Old Age Pension Scheme Application Form</p>
+            
+            <form id="pension-form">
+                <div class="form-group">
+                    <label for="full_name">Full Name *</label>
+                    <input type="text" id="full_name" name="full_name" required>
+                </div>
+                
+                <div class="form-group">
+                    <label for="age">Age *</label>
+                    <input type="number" id="age" name="age" required>
+                </div>
+                
+                <div class="form-group">
+                    <label for="gender">Gender *</label>
+                    <select id="gender" name="gender" required>
+                        <option value="">Select Gender</option>
+                        <option value="male">Male</option>
+                        <option value="female">Female</option>
+                        <option value="other">Other</option>
+                    </select>
+                </div>
+                
+                <div class="form-group">
+                    <label for="aadhaar">Aadhaar Last 4 Digits *</label>
+                    <input type="text" id="aadhaar" name="aadhaar_last4" maxlength="4" required>
+                </div>
+                
+                <div class="form-group">
+                    <label for="district">Village / District *</label>
+                    <input type="text" id="district" name="village_district" required>
+                </div>
+                
+                <div class="form-group">
+                    <label for="bank">Bank Account? *</label>
+                    <select id="bank" name="has_bank_account" required>
+                        <option value="">Select</option>
+                        <option value="yes">Yes</option>
+                        <option value="no">No</option>
+                    </select>
+                </div>
+                
+                <div class="form-group">
+                    <label for="income">Monthly Income *</label>
+                    <select id="income" name="monthly_income_band" required>
+                        <option value="">Select Band</option>
+                        <option value="<1000">Less than 1000</option>
+                        <option value="1000-2000">1000 to 2000</option>
+                        <option value=">2000">More than 2000</option>
+                    </select>
+                </div>
+                
+                <div class="form-group">
+                    <label for="phone">Phone Number (Optional)</label>
+                    <input type="text" id="phone" name="phone_number">
+                </div>
+                
+                <button type="submit" id="submit-btn">Submit Secure Application</button>
+            </form>
+        </div>
+        
+        <div id="success-message">
+            <h2>Application Submitted Successfully!</h2>
+            <p>Your application has been securely processed by the government portal.</p>
+            <p>Your Reference Number is:</p>
+            <div class="ref-number" id="ref-number-display"></div>
+        </div>
+    </div>
+
+    <script>
+        document.getElementById('pension-form').addEventListener('submit', function(e) {
+            e.preventDefault();
+            
+            // Generate a fake but realistic reference number
+            const randChars = Math.random().toString(36).substring(2, 6).toUpperCase();
+            const randNums = Math.floor(100000 + Math.random() * 900000);
+            const refNumber = `TN-OAP-${randChars}-${randNums}`;
+            
+            document.getElementById('form-container').style.display = 'none';
+            document.getElementById('ref-number-display').textContent = refNumber;
+            document.getElementById('success-message').style.display = 'block';
+        });
+    </script>
+</body>
+</html>

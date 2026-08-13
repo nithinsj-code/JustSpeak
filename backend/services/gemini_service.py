@@ -48,64 +48,56 @@ DIALOGUE_MODEL = PRIMARY_MODELS[0]
 def get_stt_extract_prompt(slot_key: str, slot_description: str, lang: str = "ta") -> str:
     if lang == "ta":
         return f"""You are a Tamil and English bilingual speech recognition and form data extraction assistant.
-The user is applying for the Tamil Nadu Old Age Pension Scheme (முதியோர் உதவித்தொகை திட்டம்).
-The user may speak in Tamil, Tanglish (Tamil in English script), or English.
+The user is applying for a government pension scheme form. They may speak Tamil, Tanglish, or English.
 
-You will receive an audio clip of the user's spoken response and context about what field is being collected.
+You will receive an audio clip of the user's spoken response. The current form field being collected is: {slot_key}
+Field description: {slot_description}
 
-Return ONLY a valid JSON object (no markdown, no code fences) with these exact fields:
+Return ONLY a valid JSON object with these exact keys (no markdown, no code fences):
 {{
-  "transcript": "<verbatim transcription of what was said in Tamil or English>",
-  "value": "<clean extracted value for the field>",
-  "confidence": "high or low"
+  "transcript": "<verbatim transcription of what was said>",
+  "value": "<the clean extracted value, or empty string if audio is silent/unclear>",
+  "target_field": "{slot_key}",
+  "confidence": "high"
 }}
 
 Extraction Rules:
-- confidence = "high" if you understood the spoken value and it fits the expected field.
-- confidence = "low" if audio was silence, unclear, noisy, or completely irrelevant.
-- For intent: if user agrees ("ஆம்", "சரி", "ஆமா", "தொடங்கலாம்", "விண்ணப்பிக்க வேண்டும்", "yes", "sure", "ok", "apply"), set value = "yes" and confidence = "high". If user denies ("இல்லை", "வேண்டாம்", "no"), set value = "no" and confidence = "high".
-- For full_name: extract the spoken person name (e.g. "என் பெயர் ராமு" -> "ராமு", "கந்தசாமி" -> "கந்தசாமி", "Sachin" -> "Sachin"). Always set confidence = "high" if any name is spoken.
-- For village_district: extract the location / district / village (e.g. "மதுரை" -> "மதுரை", "சென்னை" -> "சென்னை", "சேலம்" -> "சேலம்", "Chennai" -> "Chennai"). Always set confidence = "high" if any location is spoken.
-- For age: extract only numeric digits (e.g. "அறுபத்தைந்து" / "65" / "sixty five" -> "65", "எழுபது" / "70" -> "70").
-- For aadhaar_last4: extract exactly 4 digits (e.g. "ஐந்து ஆறு ஏழு எட்டு" / "5678" -> "5678", "1 2 3 4" -> "1234").
-- For gender: normalize to "male" or "female" (e.g. "ஆண்" -> "male", "பெண்" -> "female", "male" -> "male", "female" -> "female").
-- For has_bank_account: normalize to "yes" or "no" (e.g. "ஆம்" / "ஆமா" / "இருக்கு" / "yes" -> "yes", "இல்லை" / "இல்ல" / "no" -> "no").
-- For monthly_income_band: extract/summarize income description (e.g. "1000", "Less than 1000", "ஆயிரத்திற்கும் குறைவு").
-- For phone_number: extract 10-digit number or set value = "skip" if user says "இல்லை" / "தவிர்" / "skip" / "don't have one".
-- For confirmation: if user confirms ("ஆம்", "சரி", "ஆமா", "yes", "correct"), set value = "yes"; if user denies ("இல்லை", "தவறு", "no"), set value = "no"; if user asks to repeat ("மீண்டும்", "திரும்ப", "repeat"), set value = "repeat".
-
-Current field being collected: {slot_key}
-Field description: {slot_description}
+- MOST IMPORTANT: If audio is completely silent, background noise only, or totally unintelligible, return value as empty string "" and confidence "low". DO NOT invent names or data.
+- For full_name / name fields: extract any spoken name. "என் பெயர் ராமு" → "ராமு". "My name is Sachin" → "Sachin". "கந்தசாமி" → "கந்தசாமி". Confidence = "high" if ANY name spoken.
+- For age fields: extract numeric digits only. "அறுபத்தைந்து" → "65". "sixty five" → "65". "எழுபது" → "70".
+- For gender fields: normalize to "male" or "female". "ஆண்" → "male". "பெண்" → "female".
+- For aadhaar / ID digit fields: extract exactly the digits spoken. "ஐந்து ஆறு ஏழு எட்டு" → "5678". "1 2 3 4" → "1234".
+- For village/district/location fields: extract the place name spoken. Confidence = "high" if ANY place is spoken.
+- For yes/no fields (bank account, etc.): "ஆம்"/"ஆமா"/"இருக்கு"/"yes" → "yes". "இல்லை"/"இல்ல"/"no" → "no".
+- For income fields: summarize as clean text e.g. "Less than 1000", "1000 to 2000", "More than 2000".
+- For phone number fields: extract 10 digits. If user says "இல்லை"/"skip"/"தவிர்" → "skip".
+- For intent/confirmation fields: "ஆம்"/"சரி"/"yes"/"ok" → "yes". "இல்லை"/"no" → "no".
+- Mid-flow correction: If the user says something like "Wait, change my name" while answering a DIFFERENT field, set target_field to the field being corrected. Otherwise, you MUST keep target_field EXACTLY as "{slot_key}".
 """
     else:
         return f"""You are an English speech recognition and form data extraction assistant.
-The user is applying for the Old Age Pension Scheme via a voice-first application.
+The user is applying for a government form. The current field being collected is: {slot_key}
+Field description: {slot_description}
 
-You will receive an audio clip of the user's spoken response and context about what field is being collected.
-
-Return ONLY a valid JSON object (no markdown, no code fences) with these exact fields:
+Return ONLY a valid JSON object (no markdown, no code fences):
 {{
-  "transcript": "<verbatim English transcription of what was said>",
-  "value": "<the clean extracted value for the field, normalized>",
-  "confidence": "high or low"
+  "transcript": "<verbatim transcription>",
+  "value": "<clean extracted value, or empty string if silent/unclear>",
+  "target_field": "{slot_key}",
+  "confidence": "high"
 }}
 
 Rules:
-- confidence = "high" if you clearly understood the spoken value and it fits the expected field
-- confidence = "low" if audio was unclear, ambiguous, noisy, or value does not make sense for the field
-- For intent: if user says "yes", "yeah", "sure", "ok", "apply", "I want to apply", or expresses willingness, set value = "yes" and confidence = "high".
-- For full_name: extract the spoken person name (e.g., "My name is Sachin" -> "Sachin", "John Smith" -> "John Smith"). Always set confidence = "high" if any name is spoken.
-- For village_district: extract the location name. Always set confidence = "high" if any location is spoken.
-- For age: extract only the numeric digits (e.g., "sixty five" -> "65", "I am 72" -> "72").
-- For aadhaar_last4: extract exactly 4 digits (e.g., "five six seven eight" -> "5678", "1 2 3 4" -> "1234").
-- For gender: normalize to "male" or "female".
-- For has_bank_account: normalize to "yes" or "no".
-- For phone_number: if user says "no", "skip", "don't have one", or "not needed", set value = "skip" and confidence = "high".
-- For monthly_income_band: extract/summarize income description into clean text.
-- For confirmation: if user confirms ("yes", "yeah", "correct"), set value = "yes"; if they deny ("no", "wrong", "change"), set value = "no"; if repeat ("repeat", "again"), set value = "repeat".
-
-Current field being collected: {slot_key}
-Field description: {slot_description}
+- MOST IMPORTANT: If audio is completely silent or unintelligible, return value as empty string "" and confidence "low". DO NOT invent or guess data.
+- For name fields: extract the spoken name. "My name is John" → "John". Confidence = "high" if any name spoken.
+- For age fields: extract numeric digits. "sixty five" → "65", "I am 72" → "72".
+- For gender fields: normalize to "male" or "female".
+- For yes/no fields: "yes"/"yeah"/"sure" → "yes". "no"/"nope" → "no".
+- For location fields: extract the place name. Confidence = "high" if any location spoken.
+- For 4-digit ID fields: extract exactly 4 digits. "five six seven eight" → "5678".
+- For income fields: summarize as "Less than 1000", "1000 to 2000", or "More than 2000".
+- For phone fields: extract 10 digits or return "skip" if user declines.
+- Mid-flow correction: If user says "change my [field]", set target_field to that field key. Otherwise, you MUST keep target_field EXACTLY as "{slot_key}".
 """
 
 
@@ -159,13 +151,13 @@ async def transcribe_and_extract(
             "confirmation": ("Yes", "yes"),
         }
         val = mock_values.get(slot_key, ("yes", "yes"))
-        return {"transcript": val[0], "value": val[1], "confidence": "high"}
+        return {"transcript": val[0], "value": val[1], "target_field": slot_key, "confidence": "high"}
 
     print(f"[STT] Processing audio for slot '{slot_key}' (lang={lang}): {len(audio_bytes)} bytes, mime={mime_type}")
 
     if len(audio_bytes) < 100:
         print(f"[STT] WARNING: Audio too small ({len(audio_bytes)} bytes) — likely empty recording")
-        return {"transcript": "", "value": "", "confidence": "low"}
+        return {"transcript": "", "value": "", "target_field": slot_key, "confidence": "low"}
 
     try:
         system_prompt = get_stt_extract_prompt(
@@ -196,8 +188,14 @@ async def transcribe_and_extract(
             print(f"[STT] JSON parse failed, attempting regex extraction...")
             match = re.search(r'\{[^{}]*\}', raw_text, re.DOTALL)
             if match:
-                result = json.loads(match.group())
+                try:
+                    result = json.loads(match.group())
+                except json.JSONDecodeError:
+                    result = {}
             else:
+                result = {}
+
+            if not result:
                 # Last resort: treat entire raw text as the transcript
                 print(f"[STT] No JSON found. Using raw text as transcript.")
                 return {
@@ -206,16 +204,20 @@ async def transcribe_and_extract(
                     "confidence": "high",
                 }
 
-        transcript = result.get("transcript", "")
-        value = result.get("value", "")
+        transcript = result.get("transcript", "") or ""
+        # Handle JSON null (None) from Gemini — treat as empty string
+        raw_value = result.get("value")
+        value = "" if raw_value is None else str(raw_value)
+        target_field = result.get("target_field") or slot_key
+        # Normalize target_field — if Gemini returns unknown key, default to current slot
         confidence = result.get("confidence", "low")
-        print(f"[STT] Parsed for '{slot_key}': transcript='{transcript}', value='{value}', confidence='{confidence}'")
+        print(f"[STT] Parsed for '{slot_key}': transcript='{transcript}', value='{value}', target_field='{target_field}', confidence='{confidence}'")
 
-        return {"transcript": transcript, "value": value, "confidence": confidence}
+        return {"transcript": transcript, "value": value, "target_field": target_field, "confidence": confidence}
 
     except Exception as e:
         print(f"[STT] transcribe_and_extract ERROR for slot '{slot_key}': {type(e).__name__}: {e}")
-        return {"transcript": "", "value": "", "confidence": "low"}
+        return {"transcript": "", "value": "", "target_field": slot_key, "confidence": "low", "error": "api_error"}
 
 
 # ---------------------------------------------------------------------------
@@ -364,8 +366,7 @@ async def synthesize_speech(text: str, lang: str = "ta") -> bytes:
 
     # For English or fallback
     try:
-        response = client.models.generate_content(
-            model=STT_LLM_MODEL,
+        response = _generate_with_model_fallback(
             contents=f"Read aloud verbatim: {text}",
             config=types.GenerateContentConfig(
                 response_modalities=["AUDIO"],

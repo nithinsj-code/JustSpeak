@@ -24,6 +24,7 @@ class SessionData(BaseModel):
     state: ConversationState = ConversationState.GREETING
     language: str = "ta"  # "ta" | "en"
     slots: dict[str, SlotInfo] = {}
+    dynamic_slots: list[dict] = []  # Added for dynamic vision parsing
     current_slot_index: int = 0
     confirmation_index: int = 0  # which slot we're confirming
     retry_count: int = 0         # retries on current slot
@@ -36,6 +37,7 @@ class StartSessionResponse(BaseModel):
     audio_base64: str          # base64-encoded greeting audio
     state: str
     language: str = "ta"
+    slots_config: list[dict] = []
 
 
 class TurnRequest(BaseModel):
