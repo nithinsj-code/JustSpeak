@@ -9,6 +9,7 @@ import { Mic, Volume2, VolumeX, Sparkles, Loader2, Globe, CheckCircle2 } from 'l
 import { cn } from '@/lib/utils'
 import AudioPlayer from './components/AudioPlayer'
 import DebugPanel from './components/DebugPanel'
+import AIVoiceParticles from './components/AIVoiceParticles'
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 
@@ -470,49 +471,35 @@ export default function App() {
         </div>
       </header>
 
-      {/* Main Container */}
-      <div className="relative z-10 flex flex-col xl:flex-row items-center justify-center w-full max-w-[90rem] mx-auto px-6 gap-12 pt-24 xl:pt-0 pb-12 xl:pb-0 h-full min-h-screen overflow-y-auto">
-        
-        {/* Main Siri-style Voice Interaction Orb */}
-        <main className={cn(
-          "flex flex-col items-center space-y-8 text-center transition-all duration-700 ease-in-out shrink-0",
-          ['SLOT_FILLING', 'CONFIRMATION', 'SUBMIT', 'DONE'].includes(convState)
-            ? "xl:w-[400px] xl:scale-90"
-            : "max-w-lg w-full scale-100"
-        )}>
-        {/* Central Glowing Button */}
-        <motion.div
-          className="relative"
-          whileHover={{ scale: 1.04 }}
-          whileTap={{ scale: 0.96 }}
-        >
+      {/* Main Siri-style Voice Interaction Orb */}
+      <main className="relative z-10 flex flex-col items-center space-y-8 max-w-lg w-full px-6 text-center">
+        {/* 3D Particle Swarm AI Voice Centerpiece */}
+        <div className="relative w-80 h-80 flex items-center justify-center">
+          {/* 3D Three.js Particle Swarm Canvas */}
+          <AIVoiceParticles
+            appState={appState}
+            volume={volume}
+            onClick={handleToggleListening}
+            className="absolute inset-0 z-10"
+          />
+
+          {/* Central Glassmorphic Core Action Button */}
           <motion.button
             onClick={handleToggleListening}
-            aria-label="Voice Interaction Button"
+            aria-label="AI Voice Interaction Button"
             className={cn(
-              'relative w-36 h-36 rounded-full flex items-center justify-center transition-all duration-300',
-              'bg-gradient-to-b from-[#2A2F3D] to-[#161822] border-2',
+              'relative z-20 w-24 h-24 rounded-full flex items-center justify-center backdrop-blur-xl border transition-all duration-300 shadow-2xl',
+              'bg-[#101422]/70',
               appState === 'listening'
-                ? 'border-blue-500 shadow-[0_0_35px_rgba(59,130,246,0.5)]'
+                ? 'border-cyan-400/80 shadow-[0_0_40px_rgba(6,182,212,0.6)]'
                 : appState === 'thinking'
-                ? 'border-yellow-500 shadow-[0_0_35px_rgba(234,179,8,0.5)]'
+                ? 'border-amber-400/80 shadow-[0_0_40px_rgba(245,158,11,0.6)]'
                 : appState === 'speaking'
-                ? 'border-green-500 shadow-[0_0_35px_rgba(34,197,94,0.5)]'
-                : 'border-zinc-700/60 hover:border-blue-500/50 shadow-lg'
+                ? 'border-emerald-400/80 shadow-[0_0_40px_rgba(16,185,129,0.6)]'
+                : 'border-blue-500/40 hover:border-blue-400/80 shadow-[0_0_25px_rgba(59,130,246,0.3)]'
             )}
-            animate={{
-              boxShadow:
-                appState === 'listening'
-                  ? [
-                      '0 0 0 0 rgba(59, 130, 246, 0.5)',
-                      '0 0 0 24px rgba(59, 130, 246, 0)',
-                    ]
-                  : undefined,
-            }}
-            transition={{
-              duration: 1.5,
-              repeat: appState === 'listening' ? Infinity : 0,
-            }}
+            whileHover={{ scale: 1.08 }}
+            whileTap={{ scale: 0.94 }}
           >
             <AnimatePresence mode="wait">
               {appState === 'thinking' ? (
@@ -522,7 +509,7 @@ export default function App() {
                   animate={{ opacity: 1, scale: 1 }}
                   exit={{ opacity: 0, scale: 0.8 }}
                 >
-                  <Loader2 className="w-14 h-14 text-yellow-500 animate-spin" />
+                  <Loader2 className="w-10 h-10 text-amber-400 animate-spin" />
                 </motion.div>
               ) : appState === 'speaking' ? (
                 <motion.div
@@ -531,7 +518,7 @@ export default function App() {
                   animate={{ opacity: 1, scale: 1 }}
                   exit={{ opacity: 0, scale: 0.8 }}
                 >
-                  <Volume2 className="w-14 h-14 text-green-500" />
+                  <Volume2 className="w-10 h-10 text-emerald-400" />
                 </motion.div>
               ) : appState === 'listening' ? (
                 <motion.div
@@ -540,7 +527,7 @@ export default function App() {
                   animate={{ opacity: 1, scale: 1 }}
                   exit={{ opacity: 0, scale: 0.8 }}
                 >
-                  <Mic className="w-14 h-14 text-blue-500" />
+                  <Mic className="w-10 h-10 text-cyan-300 animate-pulse" />
                 </motion.div>
               ) : (
                 <motion.div
@@ -549,37 +536,12 @@ export default function App() {
                   animate={{ opacity: 1, scale: 1 }}
                   exit={{ opacity: 0, scale: 0.8 }}
                 >
-                  <Mic className="w-14 h-14 text-zinc-400" />
+                  <Mic className="w-10 h-10 text-blue-400" />
                 </motion.div>
               )}
             </AnimatePresence>
           </motion.button>
-
-          {/* Pulse Concentric Rings */}
-          <AnimatePresence>
-            {appState === 'listening' && (
-              <>
-                <motion.div
-                  className="absolute inset-0 rounded-full border-2 border-blue-500/35 pointer-events-none"
-                  initial={{ scale: 1, opacity: 0.7 }}
-                  animate={{ scale: 1.55, opacity: 0 }}
-                  transition={{ duration: 1.6, repeat: Infinity, ease: 'easeOut' }}
-                />
-                <motion.div
-                  className="absolute inset-0 rounded-full border-2 border-blue-500/20 pointer-events-none"
-                  initial={{ scale: 1, opacity: 0.5 }}
-                  animate={{ scale: 2.1, opacity: 0 }}
-                  transition={{
-                    duration: 1.6,
-                    repeat: Infinity,
-                    ease: 'easeOut',
-                    delay: 0.5,
-                  }}
-                />
-              </>
-            )}
-          </AnimatePresence>
-        </motion.div>
+        </div>
 
         {/* 32-Band Audio Waveform Visualizer */}
         <div className="flex items-center justify-center space-x-1.5 h-16 w-full max-w-sm">
