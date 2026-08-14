@@ -48,6 +48,11 @@ export default function App() {
   const [started, setStarted] = useState(false)
   const [done, setDone] = useState(false)
   const [referenceNumber, setReferenceNumber] = useState(null)
+  const [convState, setConvState] = useState('GREETING')
+  const [slotsConfig, setSlotsConfig] = useState([])
+  const [currentSlot, setCurrentSlot] = useState(null)
+  const [slotsData, setSlotsData] = useState({})
+  const [turnId, setTurnId] = useState(0)
 
   // Siri UI visual state
   const [volume, setVolume] = useState(0)
@@ -183,6 +188,8 @@ export default function App() {
         const data = await res.json()
 
         setSessionId(data.session_id)
+        setConvState(data.state)
+        if (data.slots_config) setSlotsConfig(data.slots_config)
         setDebugData((d) => ({
           ...d,
           sessionId: data.session_id,
@@ -190,6 +197,7 @@ export default function App() {
           lang: selectedLang,
         }))
         setAudioB64(data.audio_base64)
+        setTurnId((t) => t + 1)
         setAppState('speaking')
       } catch (err) {
         console.error('[startSession]', err)
@@ -279,8 +287,12 @@ export default function App() {
           (lang === 'ta' ? 'தொட்டு பேசவும்.' : 'Tap to speak your answer.')
       )
       setAudioB64(data.audio_base64)
+      setTurnId((t) => t + 1)
       setAppState('speaking')
 
+      setConvState(data.state)
+      setCurrentSlot(data.current_slot)
+      setSlotsData(data.slots || {})
       setDebugData((d) => ({
         ...d,
         state: data.state,
@@ -316,6 +328,7 @@ export default function App() {
       setReferenceNumber(data.reference_number)
       setAgentMessage(data.message)
       setAudioB64(data.audio_base64)
+      setTurnId((t) => t + 1)
       setAppState('speaking')
       setDone(true)
       setDebugData((d) => ({ ...d, state: 'DONE' }))
@@ -625,10 +638,133 @@ export default function App() {
           <Sparkles className="w-3.5 h-3.5 text-blue-400" />
           <span>AI Voice Assistant</span>
         </motion.div>
-      </main>
+        </main>
+
+        {/* Dynamic Pension Scheme Application Form */}
+        <AnimatePresence>
+          {['SLOT_FILLING', 'CONFIRMATION', 'SUBMIT', 'DONE'].includes(convState) && (
+            <motion.div
+              initial={{ opacity: 0, x: 50, scale: 0.95 }}
+              animate={{ opacity: 1, x: 0, scale: 1 }}
+              exit={{ opacity: 0, x: 50, scale: 0.95 }}
+              transition={{ duration: 0.6, ease: [0.16, 1, 0.3, 1] }}
+              className="w-full max-w-4xl bg-zinc-900/60 backdrop-blur-2xl border border-zinc-700/50 rounded-3xl p-8 xl:p-10 shadow-[0_0_50px_rgba(0,0,0,0.5)]"
+            >
+              <div className="flex items-center space-x-4 mb-8">
+                <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center shadow-lg shadow-blue-500/20">
+                  <CheckCircle2 className="w-6 h-6 text-white" />
+                </div>
+                <div>
+                  <h2 className="text-2xl md:text-3xl font-semibold text-zinc-100 tracking-tight">
+                    {lang === 'ta' ? 'முதியோர் உதவித்தொகை விண்ணப்பம்' : 'Old Age Pension Application'}
+                  </h2>
+                  <p className="text-zinc-400 text-sm mt-1">
+                    {lang === 'ta' ? 'உங்கள் குரல் மூலம் விவரங்கள் சேகரிக்கப்படுகின்றன' : 'Collecting details via voice assistant'}
+                  </p>
+                </div>
+              </div>
+              
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {slotsConfig.map((slot) => {
+                  const isActive = currentSlot === slot.key;
+                  const slotValue = slotsData[slot.key]?.value || '';
+                  const isSkipped = slotsData[slot.key]?.skipped;
+                  const displayValue = isSkipped ? (lang === 'ta' ? 'தவிர்க்கப்பட்டது' : 'Skipped') : slotValue;
+                  const isFilled = !!displayValue;
+                  
+                  return (
+                    <motion.div 
+                      key={slot.key} 
+                      layout
+                      className={cn(
+                        "flex flex-col space-y-2 p-5 rounded-2xl transition-all duration-500 relative overflow-hidden",
+                        isActive ? "bg-blue-950/40 border border-blue-500/50 shadow-inner" 
+                        : isFilled ? "bg-zinc-800/40 border border-zinc-700/40" 
+                        : "bg-zinc-900/40 border border-zinc-800/50 opacity-60"
+                      )}
+                    >
+                      {/* Active highlight glow */}
+                      {isActive && (
+                        <motion.div 
+                          className="absolute inset-0 bg-gradient-to-r from-blue-500/10 to-transparent pointer-events-none"
+                          initial={{ opacity: 0 }}
+                          animate={{ opacity: 1 }}
+                          transition={{ duration: 0.5 }}
+                        />
+                      )}
+
+                      <label className={cn(
+                        "text-sm font-medium relative z-10 transition-colors duration-300",
+                        isActive ? "text-blue-400" : isFilled ? "text-zinc-300" : "text-zinc-500"
+                      )}>
+                        {lang === 'ta' ? slot.label_ta : slot.label_en}
+                      </label>
+                      <div className="flex items-center space-x-3 relative z-10">
+                        <div className={cn(
+                          "flex-1 px-4 py-3 rounded-xl text-base font-medium transition-all duration-300 border",
+                          isActive ? "bg-blue-900/20 border-blue-500/30 text-blue-50 shadow-[0_0_15px_rgba(59,130,246,0.15)]" 
+                          : isFilled ? "bg-zinc-800/80 border-zinc-700/50 text-zinc-200"
+                          : "bg-zinc-900/80 border-zinc-800/80 text-zinc-600"
+                        )}>
+                          {displayValue || (lang === 'ta' ? 'காத்திருக்கிறது...' : 'Waiting...')}
+                        </div>
+                        
+                        <AnimatePresence mode="wait">
+                          {isActive && (
+                            <motion.div
+                              initial={{ opacity: 0, scale: 0.5 }}
+                              animate={{ opacity: 1, scale: 1 }}
+                              exit={{ opacity: 0, scale: 0.5 }}
+                            >
+                              <div className="w-10 h-10 rounded-full bg-blue-500/10 flex items-center justify-center">
+                                <Loader2 className="w-5 h-5 text-blue-500 animate-spin" />
+                              </div>
+                            </motion.div>
+                          )}
+                          {isFilled && !isActive && (
+                            <motion.div
+                              initial={{ opacity: 0, scale: 0.5 }}
+                              animate={{ opacity: 1, scale: 1 }}
+                              exit={{ opacity: 0, scale: 0.5 }}
+                            >
+                              <div className="w-10 h-10 rounded-full bg-emerald-500/10 flex items-center justify-center">
+                                <CheckCircle2 className="w-5 h-5 text-emerald-500" />
+                              </div>
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
+                      </div>
+                    </motion.div>
+                  );
+                })}
+              </div>
+
+              {convState === 'DONE' && (
+                 <motion.div
+                   initial={{ opacity: 0, y: 20 }}
+                   animate={{ opacity: 1, y: 0 }}
+                   className="mt-8 p-6 rounded-2xl bg-gradient-to-r from-emerald-900/40 to-teal-900/40 border border-emerald-500/30 flex items-center justify-between"
+                 >
+                   <div>
+                     <h3 className="text-emerald-400 font-semibold text-lg">
+                       {lang === 'ta' ? 'விண்ணப்பம் வெற்றிகரமாக சமர்ப்பிக்கப்பட்டது!' : 'Application Submitted Successfully!'}
+                     </h3>
+                     <p className="text-emerald-200/70 text-sm mt-1">
+                       {lang === 'ta' ? 'உங்கள் குறிப்பு எண்:' : 'Your Reference Number:'} <span className="font-mono font-bold text-emerald-300 ml-1">{referenceNumber}</span>
+                     </p>
+                   </div>
+                   <div className="w-14 h-14 rounded-full bg-emerald-500/20 flex items-center justify-center shadow-[0_0_30px_rgba(16,185,129,0.3)]">
+                     <CheckCircle2 className="w-8 h-8 text-emerald-400" />
+                   </div>
+                 </motion.div>
+              )}
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
 
       {/* Hidden Audio Player for Spoken Agent Responses */}
-      <AudioPlayer audioBase64={audioB64} onEnded={handleAudioEnded} />
+      <AudioPlayer audioBase64={audioB64} turnId={turnId} onEnded={handleAudioEnded} />
 
       {/* Judges Debug Panel (Ctrl+D) */}
       <DebugPanel

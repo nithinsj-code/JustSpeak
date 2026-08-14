@@ -3,7 +3,7 @@
  */
 import { useEffect, useRef } from 'react'
 
-export default function AudioPlayer({ audioBase64, onEnded }) {
+export default function AudioPlayer({ audioBase64, turnId, onEnded }) {
   const audioRef = useRef(null)
 
   useEffect(() => {
@@ -29,7 +29,7 @@ export default function AudioPlayer({ audioBase64, onEnded }) {
     })
 
     return () => URL.revokeObjectURL(url)
-  }, [audioBase64])
+  }, [audioBase64, turnId])
 
   return (
     <audio

@@ -8,6 +8,7 @@ import os
 from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from routers.session import router as session_router
 
@@ -32,6 +33,9 @@ app.add_middleware(
 
 # Register routers
 app.include_router(session_router)
+
+# Mount static files (mock government site)
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 
 @app.get("/")

@@ -21,8 +21,15 @@ from models.schemas import (
 from services import gemini_service as gemini
 from services import state_machine as sm
 from services import supabase_service as db
+from services import browser_automation
+from services import vision_service
 
 router = APIRouter(prefix="/session", tags=["session"])
+
+
+# Default target URL — the mock gov site we created.
+# In real deployment, this would be the actual government pension form URL.
+DEFAULT_FORM_URL = "http://localhost:8000/static/mock_gov_site.html"
 
 
 # ---------------------------------------------------------------------------
@@ -30,24 +37,62 @@ router = APIRouter(prefix="/session", tags=["session"])
 # ---------------------------------------------------------------------------
 
 @router.post("/start", response_model=StartSessionResponse)
-async def start_session(lang: str = Query("ta", description="Language code: ta or en")):
-    """Create a new session and return the greeting audio in selected language."""
+async def start_session(
+    lang: str = Query("ta", description="Language code: ta or en"),
+    target_url: str = Query(None, description="Optional URL of the government form to fill"),
+):
+    """
+    Create a new session. Uses Gemini Vision to parse the target form URL
+    and generate dynamic slot definitions, then returns the greeting audio.
+    """
     session_id = str(uuid.uuid4())
     language = "en" if lang.lower() == "en" else "ta"
 
-    # Create session in Supabase / mock db
+    # --- Step 1: Vision-Based Dynamic Slot Extraction ---
+    form_url = target_url or DEFAULT_FORM_URL
+    print(f"[SESSION] Starting vision-based slot extraction from: {form_url}")
+
+    try:
+        screenshot_bytes = await vision_service.capture_form_screenshot(form_url)
+        dynamic_slots = await vision_service.extract_slots_from_screenshot(
+            screenshot_bytes,
+            gemini.client,
+            gemini.PRIMARY_MODELS,
+        )
+    except Exception as e:
+        print(f"[SESSION] Vision extraction failed: {e}. Using fallback slots.")
+        dynamic_slots = vision_service._fallback_slots()
+
+    # --- Step 2: Create session in DB ---
     db.create_session(session_id, language=language)
 
-    # Build greeting audio
+    # --- Step 3: Persist dynamic_slots in session ---
+    session_row = db.get_session(session_id)
+    session = db.dict_to_session_data(session_row)
+    session.dynamic_slots = dynamic_slots
+    db.update_session(session_id, db.session_to_dict(session))
+
+    # --- Step 4: Build greeting audio ---
     greeting_text = gemini.get_greeting_text(language)
     greeting_audio = await gemini.synthesize_speech(greeting_text, lang=language)
     audio_b64 = gemini.audio_to_base64(greeting_audio)
+
+    # --- Step 5: Return slots_config to frontend ---
+    slots_config = [
+        {
+            "key": s["key"],
+            "label_en": s.get("label_en", s["key"]),
+            "label_ta": s.get("label_ta", s["key"]),
+        }
+        for s in dynamic_slots
+    ]
 
     return StartSessionResponse(
         session_id=session_id,
         audio_base64=audio_b64,
         state=ConversationState.GREETING.value,
         language=language,
+        slots_config=slots_config,
     )
 
 
@@ -72,16 +117,21 @@ async def process_turn(
     session = db.dict_to_session_data(session_row)
     lang = getattr(session, "language", "ta") or "ta"
 
+    # If dynamic_slots is empty (old session), load fallback
+    if not session.dynamic_slots:
+        session.dynamic_slots = vision_service._fallback_slots()
+
     transcript = ""
     extracted_value = ""
     confidence = "high"
+    audio_bytes = None
+    mime_type = "audio/webm"
 
     # --- Read audio or text ---
     if audio:
         audio_bytes = await audio.read()
         mime_type = audio.content_type or "audio/webm"
     elif text_input:
-        audio_bytes = None
         transcript = text_input
     else:
         raise HTTPException(status_code=400, detail="Provide either audio or text_input")
@@ -92,16 +142,36 @@ async def process_turn(
     if session.state in (ConversationState.GREETING, ConversationState.INTENT_CAPTURE):
         if audio_bytes:
             result = await gemini.transcribe_and_extract(
-                audio_bytes, "intent", "Does user want to apply for old age pension?", lang=lang, mime_type=mime_type
+                audio_bytes, "intent", "Does user want to apply for the government pension form?",
+                lang=lang, mime_type=mime_type,
             )
             transcript = result.get("transcript", "")
-            extracted_value = result.get("value") or result.get("extracted_value", "")
+            extracted_value = result.get("value") or ""
             confidence = result.get("confidence", "low")
         else:
             extracted_value = transcript
 
-        if sm.process_intent_capture(extracted_value or transcript):
-            # User confirmed → start slot filling
+        # Use the raw transcript for intent detection — NOT extracted_value.
+        # extracted_value for an "intent" slot can accidentally capture a name
+        # or unrelated phrase (e.g. user says their name instead of "yes"),
+        # which may contain deny-word substrings and trigger a false rejection.
+        # The transcript is the verbatim speech, which is safer to check.
+        # Also: if confidence is low, the user spoke something unclear — treat
+        # it as intent to proceed (they are engaging, not refusing).
+        intent_text = transcript or extracted_value
+        intent_confirmed = (
+            sm.process_intent_capture(intent_text)
+            if intent_text.strip()
+            else True  # empty audio → proceed by default
+        )
+
+        # Additional safety: if confidence is "low" and no explicit denial
+        # in the raw transcript, always proceed (user is engaging with the app)
+        if not intent_confirmed and confidence == "low":
+            print(f"[INTENT] Low-confidence response, defaulting to proceed. transcript='{transcript}'")
+            intent_confirmed = True
+
+        if intent_confirmed:
             session.state = ConversationState.SLOT_FILLING
             session.current_slot_index = 0
             slot_def = sm.get_current_slot_def(session)
@@ -131,12 +201,17 @@ async def process_turn(
             # All slots done → move to confirmation
             session.state = ConversationState.CONFIRMATION
             session.confirmation_index = 0
-            agent_text = gemini.get_confirmation_start_text(lang)
+            agent_text = (
+                "படிவம் முழுமையாக நிரப்பப்பட்டுள்ளது. திரையில் உள்ள விவரங்களைச் சரிபார்க்கவும். எல்லாம் சரியாக உள்ளதா?"
+                if lang == "ta"
+                else "The form is fully filled. Please check the details on the screen. Is everything correct?"
+            )
             audio_out = await gemini.synthesize_speech(agent_text, lang=lang)
         else:
             slot_q = sm.get_slot_question(current_slot_def, lang)
+            target_field = current_slot_key  # default
 
-            # Extract from audio
+            # --- Extract from audio ---
             if audio_bytes:
                 result = await gemini.transcribe_and_extract(
                     audio_bytes,
@@ -146,138 +221,182 @@ async def process_turn(
                     mime_type=mime_type,
                 )
                 transcript = result.get("transcript", "")
-                extracted_value = result.get("value") or result.get("extracted_value", "")
+                extracted_value = result.get("value") or ""
+                target_field = result.get("target_field") or current_slot_key
                 confidence = result.get("confidence", "low")
             else:
                 extracted_value = transcript
 
-            print(f"[TURN] Slot '{current_slot_key}': transcript='{transcript}', extracted='{extracted_value}', confidence='{confidence}'")
-            slot_info = session.slots.get(current_slot_key, SlotInfo())
+            print(f"[TURN] Slot '{current_slot_key}': transcript='{transcript}', "
+                  f"extracted='{extracted_value}', target_field='{target_field}', confidence='{confidence}'")
 
-            # Check for skip offer acceptance
-            if slot_info.attempts >= sm.MAX_RETRIES:
-                lower = (extracted_value or transcript).lower()
-                skip_keywords = ["yes", "yeah", "sure", "ok", "skip", "ஆம்", "சரி", "தவிர்", "ஆமா"]
-                if any(w in lower for w in skip_keywords):
-                    slot_info.skipped = True
-                    slot_info.attempts += 1
-                    session.slots[current_slot_key] = slot_info
-                    sm.advance_to_next_slot(session)
-                    if sm.all_slots_filled(session):
-                        session.state = ConversationState.CONFIRMATION
-                        session.confirmation_index = 0
-                        agent_text = gemini.get_confirmation_start_text(lang)
+            # ==================================================================
+            # MID-FLOW CORRECTION: User is correcting a PREVIOUS field
+            # ==================================================================
+            is_correction = (
+                target_field != current_slot_key
+                and any(s["key"] == target_field for s in session.dynamic_slots)
+            )
+
+            # Check if STT failed due to an API Rate Limit/Overload
+            api_error = result.get("error") == "api_error" if audio_bytes else False
+
+            if api_error:
+                agent_text = (
+                    "மன்னிக்கவும், சர்வர் மிகவும் பிஸியாக உள்ளது. சிறிது நேரம் கழித்து மீண்டும் சொல்லுங்கள்."
+                    if lang == "ta"
+                    else "Sorry, the system is currently overloaded. Please wait a moment and try again."
+                )
+                audio_out = await gemini.synthesize_speech(agent_text, lang=lang)
+            elif is_correction:
+                if extracted_value and target_field != "intent":
+                    # Update the targeted slot
+                    corrected_slot = session.slots.get(target_field, SlotInfo())
+                    corrected_slot.value = extracted_value
+                    corrected_slot.confidence = "high"
+                    session.slots[target_field] = corrected_slot
+
+                    # Build acknowledgement
+                    target_def = sm.get_slot_definition(session, target_field)
+                    label = sm.get_slot_label(target_def, lang)
+                    if lang == "ta":
+                        ack = f"சரி, {label} '{extracted_value}' என்று மாற்றினேன். "
                     else:
-                        next_def = sm.get_current_slot_def(session)
-                        agent_text = (
-                            sm.get_slot_question(next_def, lang)
-                            if next_def
-                            else gemini.get_confirmation_start_text(lang)
-                        )
+                        ack = f"Okay, I've updated your {label} to '{extracted_value}'. "
+
+                    # Resume asking current question
+                    agent_text = ack + slot_q
                     audio_out = await gemini.synthesize_speech(agent_text, lang=lang)
                 else:
-                    # Retry once more
-                    slot_info.attempts += 1
-                    session.slots[current_slot_key] = slot_info
-                    agent_text = gemini.build_low_confidence_retry_text(slot_q, lang)
+                    # Unclear correction attempt — retry current slot
+                    agent_text = (
+                        f"மன்னிக்கவும், புரியவில்லை. {slot_q}"
+                        if lang == "ta"
+                        else f"Sorry, I didn't catch that. {slot_q}"
+                    )
                     audio_out = await gemini.synthesize_speech(agent_text, lang=lang)
+
+            # ==================================================================
+            # NORMAL SLOT FILLING
+            # ==================================================================
             else:
-                val_to_use = extracted_value or transcript
-                is_valid = sm.validate_slot_value(current_slot_key, val_to_use or "")
+                slot_info = session.slots.get(current_slot_key, SlotInfo())
 
-                if not val_to_use or not is_valid:
-                    # Empty or validation failure
-                    slot_info.attempts += 1
-                    slot_info.confidence = "low"
-                    session.slots[current_slot_key] = slot_info
+                # Treat literal "null" string (from older Gemini prompt) as empty
+                clean_extracted = extracted_value if extracted_value not in ("", "null", "None") else ""
+                val_to_use = clean_extracted or transcript.strip()
+                lower = (val_to_use).lower()
 
-                    if slot_info.attempts >= sm.MAX_RETRIES:
-                        agent_text = gemini.build_skip_offer_text(slot_q, lang)
+                # Check for skip offer acceptance (after MAX retries)
+                if slot_info.attempts >= sm.MAX_RETRIES:
+                    skip_keywords = ["yes", "yeah", "sure", "ok", "skip", "ஆம்", "சரி", "தவிர்", "ஆமா"]
+                    if any(w in lower for w in skip_keywords):
+                        # Mark as skipped and move on
+                        slot_info.skipped = True
+                        slot_info.attempts += 1
+                        session.slots[current_slot_key] = slot_info
+                        sm.advance_to_next_slot(session)
+                        if sm.all_slots_filled(session):
+                            session.state = ConversationState.CONFIRMATION
+                            agent_text = (
+                                "படிவம் முழுமையாக நிரப்பப்பட்டுள்ளது. திரையில் உள்ள விவரங்களைச் சரிபார்க்கவும். எல்லாம் சரியாக உள்ளதா?"
+                                if lang == "ta"
+                                else "The form is fully filled. Please check the details on the screen. Is everything correct?"
+                            )
+                        else:
+                            next_def = sm.get_current_slot_def(session)
+                            agent_text = (
+                                sm.get_slot_question(next_def, lang)
+                                if next_def
+                                else gemini.get_confirmation_start_text(lang)
+                            )
+                        audio_out = await gemini.synthesize_speech(agent_text, lang=lang)
                     else:
-                        err_msg = sm.get_slot_error(current_slot_def, lang)
-                        agent_text = err_msg or gemini.build_low_confidence_retry_text(slot_q, lang)
-                    audio_out = await gemini.synthesize_speech(agent_text, lang=lang)
+                        slot_info.attempts += 1
+                        session.slots[current_slot_key] = slot_info
+                        agent_text = gemini.build_low_confidence_retry_text(slot_q, lang)
+                        audio_out = await gemini.synthesize_speech(agent_text, lang=lang)
+
                 else:
-                    # Valid value → save and move on
-                    slot_info.value = val_to_use
-                    slot_info.confidence = confidence or "high"
-                    slot_info.attempts += 1
-                    session.slots[current_slot_key] = slot_info
-                    sm.advance_to_next_slot(session)
+                    is_valid = sm.validate_slot_value(session, current_slot_key, val_to_use or "")
 
-                    if sm.all_slots_filled(session):
-                        session.state = ConversationState.CONFIRMATION
-                        session.confirmation_index = 0
-                        agent_text = gemini.get_confirmation_start_text(lang)
+                    if not val_to_use or not is_valid:
+                        # Empty or unclear — ask again, DON'T save mock data
+                        slot_info.attempts += 1
+                        slot_info.confidence = "low"
+                        session.slots[current_slot_key] = slot_info
+
+                        if slot_info.attempts >= sm.MAX_RETRIES:
+                            agent_text = gemini.build_skip_offer_text(slot_q, lang)
+                        else:
+                            err_msg = sm.get_slot_error(current_slot_def, lang)
+                            agent_text = err_msg or gemini.build_low_confidence_retry_text(slot_q, lang)
+                        audio_out = await gemini.synthesize_speech(agent_text, lang=lang)
                     else:
-                        next_def = sm.get_current_slot_def(session)
-                        agent_text = (
-                            sm.get_slot_question(next_def, lang)
-                            if next_def
-                            else gemini.get_confirmation_start_text(lang)
-                        )
-                    audio_out = await gemini.synthesize_speech(agent_text, lang=lang)
+                        # Valid value → save and move on
+                        slot_info.value = val_to_use
+                        slot_info.confidence = confidence or "high"
+                        slot_info.attempts += 1
+                        session.slots[current_slot_key] = slot_info
+                        sm.advance_to_next_slot(session)
+
+                        if sm.all_slots_filled(session):
+                            session.state = ConversationState.CONFIRMATION
+                            agent_text = (
+                                "படிவம் முழுமையாக நிரப்பப்பட்டுள்ளது. திரையில் உள்ள விவரங்களைச் சரிபார்க்கவும். எல்லாம் சரியாக உள்ளதா?"
+                                if lang == "ta"
+                                else "The form is fully filled. Please check the details on the screen. Is everything correct?"
+                            )
+                        else:
+                            next_def = sm.get_current_slot_def(session)
+                            agent_text = (
+                                sm.get_slot_question(next_def, lang)
+                                if next_def
+                                else gemini.get_confirmation_start_text(lang)
+                            )
+                        audio_out = await gemini.synthesize_speech(agent_text, lang=lang)
 
     # =========================================================================
     # STATE: CONFIRMATION
     # =========================================================================
     elif session.state == ConversationState.CONFIRMATION:
-        summary = sm.build_confirmation_summary(session)
-        idx = session.confirmation_index
-
-        if audio_bytes and idx > 0:
+        if audio_bytes:
             result = await gemini.transcribe_and_extract(
-                audio_bytes, "confirmation", "Did user confirm yes/no/repeat?", lang=lang, mime_type=mime_type
+                audio_bytes, "confirmation", "Did user confirm yes or no?", lang=lang, mime_type=mime_type
             )
             transcript = result.get("transcript", "")
             val = result.get("value") or result.get("extracted_value") or transcript
             response_type = sm.process_confirmation_response(val)
 
             if response_type == "no":
-                if idx - 1 < len(summary):
-                    slot_key_to_fix = summary[idx - 1]["key"]
-                    if slot_key_to_fix in session.slots:
-                        session.slots[slot_key_to_fix].value = None
-                        session.slots[slot_key_to_fix].confidence = None
-                        session.slots[slot_key_to_fix].attempts = 0
-                    for i, s_def in enumerate(sm.SLOT_DEFINITIONS):
-                        if s_def["key"] == slot_key_to_fix:
-                            session.current_slot_index = i
-                            break
-                    session.state = ConversationState.SLOT_FILLING
-                    session.retry_count = 0
-                    slot_def = sm.get_slot_definition(slot_key_to_fix)
-                    agent_text = sm.get_slot_question(slot_def, lang) or "மீண்டும் சொல்லுங்கள்."
-                    audio_out = await gemini.synthesize_speech(agent_text, lang=lang)
-                else:
-                    agent_text = "மன்னிக்கவும், மீண்டும் தொடங்கலாம்." if lang == "ta" else "Sorry, let's start again."
-                    audio_out = await gemini.synthesize_speech(agent_text, lang=lang)
+                # Restart slot filling from scratch
+                session.state = ConversationState.SLOT_FILLING
+                session.current_slot_index = 0
+                for k in session.slots:
+                    session.slots[k].value = None
+                    session.slots[k].confidence = None
+                    session.slots[k].attempts = 0
 
-            elif response_type == "repeat" and idx > 0:
-                item = summary[idx - 1]
-                agent_text = gemini.build_confirmation_item_text(item["label"], item["value"], lang)
+                next_def = sm.get_current_slot_def(session)
+                q = sm.get_slot_question(next_def, lang)
+                agent_text = (
+                    f"சரி, மீண்டும் தொடங்குவோம். {q}"
+                    if lang == "ta"
+                    else f"Okay, let's start over. {q}"
+                )
                 audio_out = await gemini.synthesize_speech(agent_text, lang=lang)
             else:
-                # Confirmed → next item
-                if idx < len(summary):
-                    item = summary[idx]
-                    agent_text = gemini.build_confirmation_item_text(item["label"], item["value"], lang)
-                    session.confirmation_index += 1
-                    audio_out = await gemini.synthesize_speech(agent_text, lang=lang)
-                else:
-                    # All confirmed → submit
-                    session.state = ConversationState.SUBMIT
-                    agent_text = gemini.get_confirmation_all_done_text(lang)
-                    audio_out = await gemini.synthesize_speech(agent_text, lang=lang)
-        else:
-            # First confirmation item
-            if summary:
-                item = summary[0]
-                agent_text = gemini.build_confirmation_item_text(item["label"], item["value"], lang)
-                session.confirmation_index = 1
-            else:
-                agent_text = gemini.get_confirmation_all_done_text(lang)
+                # Confirmed → trigger submit
                 session.state = ConversationState.SUBMIT
+                agent_text = gemini.get_confirmation_all_done_text(lang)
+                audio_out = await gemini.synthesize_speech(agent_text, lang=lang)
+        else:
+            # First request: prompt visual check
+            agent_text = (
+                "படிவம் முழுமையாக நிரப்பப்பட்டுள்ளது. திரையில் உள்ள விவரங்களைச் சரிபார்க்கவும். எல்லாம் சரியாக உள்ளதா?"
+                if lang == "ta"
+                else "The form is fully filled. Please check the details on the screen. Is everything correct?"
+            )
             audio_out = await gemini.synthesize_speech(agent_text, lang=lang)
 
     # =========================================================================
@@ -324,18 +443,18 @@ async def process_turn(
 
 @router.post("/{session_id}/submit", response_model=SubmitResponse)
 async def submit_session(session_id: str):
-    """Finalize the session and write to Supabase."""
+    """Finalize session — trigger Playwright automation and return reference number."""
     session_row = db.get_session(session_id)
     if not session_row:
         raise HTTPException(status_code=404, detail="Session not found")
 
     session = db.dict_to_session_data(session_row)
     lang = getattr(session, "language", "ta") or "ta"
-    form_data = {
-        k: v.value for k, v in session.slots.items() if v.value
-    }
+    form_data = {k: v.value for k, v in session.slots.items() if v.value}
 
-    ref = db.create_submission(session_id, form_data)
+    # Delegate to Playwright automation
+    ref = await browser_automation.submit_pension_application(form_data)
+
     session.state = ConversationState.DONE
     db.update_session(session_id, db.session_to_dict(session))
 

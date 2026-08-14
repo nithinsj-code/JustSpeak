@@ -7,3 +7,4 @@ google-genai>=0.1.1
 gtts>=2.5.4
 supabase>=2.10.0
 httpx>=0.28.1
+playwright>=1.47.0
