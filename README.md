@@ -124,4 +124,4 @@ npm run dev
 - WhatsApp voice bot integration to completely bypass the need for a web browser.
 
 ---
-*Built with ❤️ for digital inclusion.*
+...
