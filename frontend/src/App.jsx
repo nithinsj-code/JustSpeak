@@ -761,7 +761,6 @@ export default function App() {
             </motion.div>
           )}
         </AnimatePresence>
-      </div>
 
       {/* Hidden Audio Player for Spoken Agent Responses */}
       <AudioPlayer audioBase64={audioB64} turnId={turnId} onEnded={handleAudioEnded} />
