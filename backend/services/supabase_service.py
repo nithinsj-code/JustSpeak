@@ -7,10 +7,17 @@ import random
 import string
 from datetime import datetime, timezone
 
+from pathlib import Path
+
 from dotenv import load_dotenv
 from supabase import create_client, Client
 
+base_dir = Path(__file__).resolve().parent.parent
+for env_path in (base_dir / ".env", base_dir.parent / ".env", base_dir / "tests" / ".env"):
+    if env_path.exists():
+        load_dotenv(dotenv_path=env_path, override=False)
 load_dotenv()
+
 
 SUPABASE_URL = os.getenv("SUPABASE_URL", "")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")

@@ -10,6 +10,8 @@ import re
 import struct
 from io import BytesIO
 
+from pathlib import Path
+
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
@@ -19,6 +21,10 @@ try:
 except ImportError:
     gTTS = None
 
+base_dir = Path(__file__).resolve().parent.parent
+for env_path in (base_dir / ".env", base_dir.parent / ".env", base_dir / "tests" / ".env"):
+    if env_path.exists():
+        load_dotenv(dotenv_path=env_path, override=False)
 load_dotenv()
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
@@ -34,11 +40,12 @@ else:
 PRIMARY_MODELS = [
     "gemini-3.5-flash",
     "gemini-3.1-flash-lite",
-    "gemini-3-flash-preview",
+    "gemini-flash-latest",
     "gemini-3.6-flash",
 ]
 STT_LLM_MODEL  = PRIMARY_MODELS[0]
 DIALOGUE_MODEL = PRIMARY_MODELS[0]
+
 
 
 # ---------------------------------------------------------------------------
@@ -48,31 +55,32 @@ DIALOGUE_MODEL = PRIMARY_MODELS[0]
 def get_stt_extract_prompt(slot_key: str, slot_description: str, lang: str = "ta") -> str:
     if lang == "ta":
         return f"""You are a Tamil and English bilingual speech recognition and form data extraction assistant.
-The user is applying for a government pension scheme form. They may speak Tamil, Tanglish, or English.
+The user is applying for a government pension scheme form in Tamil Nadu. They speak Tamil, Tanglish, or English.
 
 You will receive an audio clip of the user's spoken response. The current form field being collected is: {slot_key}
 Field description: {slot_description}
 
+CRITICAL: Since the interface is in Tamil (lang=ta), the extracted "value" MUST be formatted in TAMIL script (not English).
+
 Return ONLY a valid JSON object with these exact keys (no markdown, no code fences):
 {{
   "transcript": "<verbatim transcription of what was said>",
-  "value": "<the clean extracted value, or empty string if audio is silent/unclear>",
+  "value": "<the clean extracted value in TAMIL, or empty string if audio is silent/unclear>",
   "target_field": "{slot_key}",
   "confidence": "high"
 }}
 
-Extraction Rules:
+Extraction Rules for Tamil:
 - MOST IMPORTANT: If audio is completely silent, background noise only, or totally unintelligible, return value as empty string "" and confidence "low". DO NOT invent names or data.
-- For full_name / name fields: extract any spoken name. "என் பெயர் ராமு" → "ராமு". "My name is Sachin" → "Sachin". "கந்தசாமி" → "கந்தசாமி". Confidence = "high" if ANY name spoken.
-- For age fields: extract numeric digits only. "அறுபத்தைந்து" → "65". "sixty five" → "65". "எழுபது" → "70".
-- For gender fields: normalize to "male" or "female". "ஆண்" → "male". "பெண்" → "female".
-- For aadhaar / ID digit fields: extract exactly the digits spoken. "ஐந்து ஆறு ஏழு எட்டு" → "5678". "1 2 3 4" → "1234".
-- For village/district/location fields: extract the place name spoken. Confidence = "high" if ANY place is spoken.
-- For yes/no fields (bank account, etc.): "ஆம்"/"ஆமா"/"இருக்கு"/"yes" → "yes". "இல்லை"/"இல்ல"/"no" → "no".
-- For income fields: summarize as clean text e.g. "Less than 1000", "1000 to 2000", "More than 2000".
-- For phone number fields: extract 10 digits. If user says "இல்லை"/"skip"/"தவிர்" → "skip".
+- For full_name / name fields: extract the spoken name in Tamil script. "என் பெயர் ராமு" → "ராமு". "My name is Sachin" / "சச்சின்" → "சச்சின்". "கந்தசாமி" → "கந்தசாமி". "Muthu" → "முத்து". Confidence = "high" if ANY name spoken.
+- For age fields: extract numeric digits only e.g. "65", "70", "75". "அறுபத்தைந்து" → "65". "எழுபத்தைந்து" / "seventy five" → "75".
+- For gender fields: normalize to Tamil "ஆண்" (Male) or "பெண்" (Female) or "மற்றவை" (Other). "ஆண்" / "male" / "man" → "ஆண்". "பெண்" / "female" / "woman" → "பெண்".
+- For aadhaar / ID digit fields: extract exactly the 4 digits spoken e.g. "5678", "1234", "5643". "ஐந்து ஆறு நான்கு மூன்று" → "5643".
+- For village/district/location fields: extract the place name in Tamil script. "Salem" / "சேலம்" → "சேலம்". "Chennai" / "சென்னை" → "சென்னை". "Madurai" / "மதுரை" → "மதுரை". "திருவண்ணாமலை" → "திருவண்ணாமலை". "Coimbatore" → "கோயம்புத்தூர்".
+- For yes/no fields (bank account, etc.): "ஆம்" (Yes) or "இல்லை" (No). "ஆம்"/"ஆமா"/"இருக்கு"/"yes"/"உண்டு" → "ஆம்". "இல்லை"/"இல்ல"/"no" → "இல்லை".
+- For income fields: summarize in Tamil e.g. "1000-க்கும் குறைவு" (<1000), "1000 முதல் 2000 வரை" (1000-2000), "2000-க்கும் மேல்" (>2000). "Less than 1000" / "ஆயிரத்திற்கும் குறைவு" → "1000-க்கும் குறைவு". "1000 to 2000" → "1000 முதல் 2000 வரை". "More than 2000" / "இரண்டாயிரத்திற்கு மேல்" → "2000-க்கும் மேல்".
 - For intent/confirmation fields: "ஆம்"/"சரி"/"yes"/"ok" → "yes". "இல்லை"/"no" → "no".
-- Mid-flow correction: If the user says something like "Wait, change my name" while answering a DIFFERENT field, set target_field to the field being corrected. Otherwise, you MUST keep target_field EXACTLY as "{slot_key}".
+- Mid-flow correction: If the user explicitly says something like "Wait, change my name" while answering a DIFFERENT field, set target_field to that field. Otherwise, you MUST keep target_field EXACTLY as "{slot_key}".
 """
     else:
         return f"""You are an English speech recognition and form data extraction assistant.

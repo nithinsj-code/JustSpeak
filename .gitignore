@@ -13,6 +13,15 @@ venv/
 .venv/
 env/
 
+# Environment variables
+.env
+.env.*
+*.env
+backend/.env
+backend/tests/.env
+frontend/.env
+
+
 # Node
 node_modules/
 
