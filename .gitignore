@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Node
+node_modules/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Environment variables and privacy
+.env
+.env.*
+*.local
+secrets.json
+firebase_credentials.json
+google_credentials.json
+credentials.json
+token.json
