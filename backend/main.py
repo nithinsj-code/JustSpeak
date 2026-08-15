@@ -4,6 +4,16 @@ Voice-first Tamil digital literacy agent for old-age pension applications.
 """
 
 import os
+import sys
+import asyncio
+from pathlib import Path
+
+# Fix for Windows asyncio subprocess / Playwright compatibility
+if sys.platform == "win32":
+    try:
+        asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+    except Exception:
+        pass
 
 from dotenv import load_dotenv
 from fastapi import FastAPI
@@ -12,7 +22,14 @@ from fastapi.staticfiles import StaticFiles
 
 from routers.session import router as session_router
 
+
+# Load .env from backend or root directory
+base_dir = Path(__file__).resolve().parent
+for env_path in (base_dir / ".env", base_dir.parent / ".env", base_dir / "tests" / ".env"):
+    if env_path.exists():
+        load_dotenv(dotenv_path=env_path, override=False)
 load_dotenv()
+
 
 app = FastAPI(
     title="JustSpeak API",

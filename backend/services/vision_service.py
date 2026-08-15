@@ -3,30 +3,36 @@ Vision Service — Uses Playwright to screenshot a government form URL
 and Gemini Vision to dynamically extract the slot definitions.
 """
 
+import asyncio
 import base64
 import json
 import re
 
-from playwright.async_api import async_playwright
+from playwright.sync_api import sync_playwright
 
 
 # ---------------------------------------------------------------------------
 # Screenshot capture
 # ---------------------------------------------------------------------------
 
-async def capture_form_screenshot(url: str) -> bytes:
-    """Open a browser, navigate to the URL, take a full-page screenshot and return PNG bytes."""
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        page = await browser.new_page(viewport={"width": 1280, "height": 900})
+def _sync_capture_screenshot(url: str) -> bytes:
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page(viewport={"width": 1280, "height": 900})
         try:
-            await page.goto(url, wait_until="networkidle", timeout=30000)
+            page.goto(url, wait_until="networkidle", timeout=30000)
             # Scroll to load lazy elements
-            await page.evaluate("window.scrollTo(0, 0)")
-            screenshot_bytes = await page.screenshot(full_page=True)
+            page.evaluate("window.scrollTo(0, 0)")
+            screenshot_bytes = page.screenshot(full_page=True)
             return screenshot_bytes
         finally:
-            await browser.close()
+            browser.close()
+
+
+async def capture_form_screenshot(url: str) -> bytes:
+    """Open a browser, navigate to the URL, take a full-page screenshot and return PNG bytes."""
+    return await asyncio.to_thread(_sync_capture_screenshot, url)
+
 
 
 # ---------------------------------------------------------------------------
@@ -87,8 +93,27 @@ async def extract_slots_from_screenshot(screenshot_bytes: bytes, gemini_client, 
             raw = re.sub(r"\n?```\s*$", "", raw)
             slots = json.loads(raw)
             if isinstance(slots, list) and len(slots) > 0:
-                print(f"[VISION] Extracted {len(slots)} slots from screenshot using model {model_name}")
-                return slots
+                normalized_slots = []
+                for s in slots:
+                    k = s.get("key", "").lower().strip()
+                    # Filter out phone number if present
+                    if "phone" in k or "mobile" in k or "தொலைபேசி" in s.get("label_ta", ""):
+                        continue
+                    # Canonical key normalization
+                    if "aadhaar" in k or "aadhar" in k:
+                        s["key"] = "aadhaar_last4"
+                    elif "bank" in k:
+                        s["key"] = "has_bank_account"
+                    elif "income" in k:
+                        s["key"] = "monthly_income_band"
+                    elif "district" in k or "village" in k or "location" in k:
+                        s["key"] = "village_district"
+                    elif k in ("name", "applicant_name"):
+                        s["key"] = "full_name"
+                    normalized_slots.append(s)
+
+                print(f"[VISION] Extracted {len(normalized_slots)} slots from screenshot using model {model_name}")
+                return normalized_slots
         except Exception as e:
             last_err = e
             print(f"[VISION] Model '{model_name}' failed ({type(e).__name__}: {e}). Trying next...")

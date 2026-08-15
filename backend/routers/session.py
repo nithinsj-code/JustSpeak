@@ -126,6 +126,8 @@ async def process_turn(
     confidence = "high"
     audio_bytes = None
     mime_type = "audio/webm"
+    result = {}
+
 
     # --- Read audio or text ---
     if audio:
@@ -231,10 +233,16 @@ async def process_turn(
                   f"extracted='{extracted_value}', target_field='{target_field}', confidence='{confidence}'")
 
             # ==================================================================
-            # MID-FLOW CORRECTION: User is correcting a PREVIOUS field
+            # MID-FLOW CORRECTION: User is explicitly correcting a PREVIOUS field
             # ==================================================================
+            correction_keywords = [
+                "மாற்று", "மாத்து", "தவறு", "தப்பாக", "இல்லை என்", "மாத்தணும்",
+                "wait", "change", "correct", "wrong", "mistake", "update my", "edit my"
+            ]
+            has_correction_intent = any(w in transcript.lower() for w in correction_keywords)
             is_correction = (
-                target_field != current_slot_key
+                has_correction_intent
+                and target_field != current_slot_key
                 and any(s["key"] == target_field for s in session.dynamic_slots)
             )
 
