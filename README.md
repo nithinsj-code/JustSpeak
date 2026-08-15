@@ -1,105 +1,131 @@
-# JustSpeak (ஒன்று பேசு)
+# 🎙️ JustSpeak (ஒன்று பேசு)
 
-> Voice-first Tamil digital literacy agent for old-age pension applications.  
-> Zero reading or typing required — end-to-end voice only.
+> **Voice-first Tamil digital literacy agent for old-age pension applications.**
+> Zero reading or typing required — an end-to-end voice-only accessible interface.
+
+![Vite](https://img.shields.io/badge/Vite-B73BFE?style=for-the-badge&logo=vite&logoColor=FFD62E)
+![React](https://img.shields.io/badge/React-20232A?style=for-the-badge&logo=react&logoColor=61DAFB)
+![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=for-the-badge&logo=FastAPI&logoColor=white)
+![Supabase](https://img.shields.io/badge/Supabase-181818?style=for-the-badge&logo=supabase&logoColor=3ECF8E)
+
+## 💡 The Problem
+In rural parts of Tamil Nadu, many elderly citizens who are eligible for the Old-Age Pension (OAP) scheme face a major barrier: **digital illiteracy**. Most online government portals require reading complex forms, typing in English, and navigating difficult UI/UX. This leaves them dependent on middlemen.
+
+## 🚀 Our Solution
+**JustSpeak (ஒன்று பேசு)** is a revolutionary web application that entirely replaces the traditional form with an interactive, voice-only AI agent.
+- 🗣️ **Zero Typing:** Speak natively in Tamil (or English).
+- 🧠 **Smart Extraction:** Powered by Google Gemini to extract slots (Name, Age, Aadhar, etc.) directly from casual speech.
+- 🔄 **Mishear Recovery:** If the AI is unsure (low confidence), it gracefully asks for clarification.
+- 🔊 **Full Voice Output:** The agent speaks back in Tamil using TTS, keeping the user informed at every step.
+
+## 🛠️ Tech Stack
+- **Frontend:** React.js, Vite, TailwindCSS, Framer Motion, Three.js (for immersive voice visuals)
+- **Backend:** Python, FastAPI, Playwright (for mock portal automation)
+- **AI & NLP:** Google Gemini (STT, TTS, and Slot Extraction)
+- **Database:** Supabase (PostgreSQL)
 
 ---
 
-## Setup
+## ⚙️ Architecture & Flow
 
-### 1. Get your API Keys
+```mermaid
+graph TD
+    A[Browser React/Vite] -->|Audio Blob WebM| B(FastAPI Backend)
+    B -->|Gemini STT & Slot Extraction| C{State Machine}
+    C -->|GREETING| B
+    C -->|INTENT_CAPTURE| B
+    C -->|SLOT_FILLING| B
+    C -->|CONFIRMATION| B
+    C -->|SUBMIT| D[(Supabase)]
+    B -->|Gemini TTS| A
+```
 
-| Service | URL | What to copy |
-|---|---|---|
-| Gemini | [aistudio.google.com](https://aistudio.google.com) | API Key |
-| Supabase | [supabase.com](https://supabase.com) → Settings → API | Project URL + anon key |
+### 🧠 State Machine
+The backend orchestrates the conversation through a strict state machine:
+1. `GREETING` → Welcomes the user in Tamil.
+2. `INTENT_CAPTURE` → Confirms they want to apply for the pension.
+3. `SLOT_FILLING` → Collects 8 crucial fields one at a time (Name, Age, Address, Aadhar, etc.).
+4. `CONFIRMATION` → Reads back the collected data for voice correction.
+5. `SUBMIT` → Saves to Supabase and speaks the reference number.
 
-### 2. Supabase Database Setup
+---
 
-1. Create a new project on Supabase
-2. Go to **SQL Editor** → **New Query**
-3. Paste the contents of `backend/supabase_schema.sql` and click **Run**
+## 💻 Local Development Setup
+
+### 1. Prerequisites
+- Node.js (v18+)
+- Python (3.10+)
+- Supabase Account
+- Google Gemini API Key
+
+### 2. Database Setup (Supabase)
+1. Create a new project on [Supabase](https://supabase.com).
+2. Go to **SQL Editor** → **New Query**.
+3. Paste the contents of `backend/supabase_schema.sql` and click **Run**.
+4. Retrieve your `Project URL` and `anon key` from Project Settings → API.
 
 ### 3. Backend Setup
-
 ```bash
 cd backend
 cp .env.example .env
-# Edit .env with your GEMINI_API_KEY, SUPABASE_URL, SUPABASE_KEY
+# Edit .env with your GEMINI_API_KEY, SUPABASE_URL, and SUPABASE_KEY
 
+# Install dependencies
 pip install -r requirements.txt
+
+# (Optional) Install Playwright browsers if using automation features
+playwright install chromium
+
+# Run the server
 uvicorn main:app --reload
-# Backend runs at http://localhost:8000
-# API docs at http://localhost:8000/docs
 ```
+> The backend will be running at `http://localhost:8000` (API Docs at `/docs`).
 
 ### 4. Frontend Setup
-
 ```bash
 cd frontend
-# .env already has VITE_API_URL=http://localhost:8000
+# Install dependencies
 npm install
+
+# Start the dev server
 npm run dev
-# Frontend runs at http://localhost:5173
 ```
-
-### 5. Run Tests
-
-```bash
-cd backend
-python tests/test_mishear_fixtures.py
-```
+> The frontend will be running at `http://localhost:5173`.
+> **Pro Tip:** Press **Ctrl+D** in the frontend to open the hidden Judges Debug Panel!
 
 ---
 
-## Architecture
+## ☁️ Deployment Instructions
 
-```
-Browser (React/Vite)
-  │  MediaRecorder → audio/webm blob
-  ↓
-FastAPI Backend
-  │  State Machine: GREETING → INTENT_CAPTURE → SLOT_FILLING → CONFIRMATION → SUBMIT
-  │  Gemini API (single call): STT + slot extraction → JSON + confidence
-  │  Gemini TTS: Tamil speech synthesis
-  ↓
-Supabase (session state + submissions)
-```
+### Backend (Render Free Tier)
+1. Connect your GitHub repo to [Render](https://render.com).
+2. Create **New Web Service** and select your repository.
+3. Configure as follows:
+   - **Root Directory:** `backend`
+   - **Environment:** `Python 3`
+   - **Build Command:** `pip install -r requirements.txt && playwright install chromium`
+   - **Start Command:** `uvicorn main:app --host 0.0.0.0 --port $PORT`
+4. Under **Environment Variables**, add:
+   - `GEMINI_API_KEY`: *(your gemini key)*
+   - `SUPABASE_URL`: *(your supabase URL)*
+   - `SUPABASE_KEY`: *(your supabase key)*
+   - `PYTHON_VERSION`: `3.11.0`
+   - `FRONTEND_ORIGIN`: Your deployed frontend URL (e.g., `https://justspeak.vercel.app`)
+5. Click **Create Web Service**.
 
-## State Machine
-
-```
-GREETING         → welcome in Tamil
-INTENT_CAPTURE   → confirm pension application intent
-SLOT_FILLING     → collect 8 fields, one at a time (with mishear recovery)
-CONFIRMATION     → full readback, voice correction loop
-SUBMIT           → write to Supabase, speak reference number
-```
-
-## Mishear Recovery
-
-- Confidence `low` → re-ask same question
-- 2 failed attempts → offer graceful skip
-- Validation failure (e.g. age < 60) → spoken explanation + re-ask
-- Never silent failure — always spoken response
-
-## Debug Panel
-
-Press **Ctrl+D** on the frontend to toggle the judges debug panel.  
-Shows: session state, current slot, transcripts, confidence scores, all collected values.
+### Frontend (Vercel)
+1. Import your repository at [Vercel](https://vercel.com).
+2. Set the **Root Directory** to `frontend`.
+3. Under **Environment Variables**, add:
+   - `VITE_API_URL`: Your deployed Render backend URL (e.g., `https://justspeak-backend.onrender.com`) - *Make sure there is no trailing slash!*
+4. Click **Deploy**.
 
 ---
 
-## Deployment
+## 🔮 Future Scope
+- Expand language support to more regional Indian languages (Hindi, Telugu, Malayalam).
+- Deep integration with real government e-Sevai portal APIs.
+- WhatsApp voice bot integration to completely bypass the need for a web browser.
 
-### Backend → Render
-1. Connect your GitHub repo to [render.com](https://render.com)
-2. Create **New Web Service** → select the `backend/` directory
-3. Set env vars: `GEMINI_API_KEY`, `SUPABASE_URL`, `SUPABASE_KEY`, `FRONTEND_ORIGIN`
-4. Deploy — Render uses `render.yaml` automatically
-
-### Frontend → Vercel
-1. Import your repo at [vercel.com](https://vercel.com)
-2. Set root directory to `frontend/`
-3. Set env var: `VITE_API_URL=https://your-render-url.onrender.com`
-4. Deploy — Vercel uses `vercel.json` automatically
+---
+*Built with ❤️ for digital inclusion.*
