@@ -30,14 +30,10 @@ In rural parts of Tamil Nadu, many elderly citizens who are eligible for the Old
 
 ```mermaid
 graph TD
-    A[Browser React/Vite] -->|Audio Blob WebM| B(FastAPI Backend)
-    B -->|Gemini STT & Slot Extraction| C{State Machine}
-    C -->|GREETING| B
-    C -->|INTENT_CAPTURE| B
-    C -->|SLOT_FILLING| B
-    C -->|CONFIRMATION| B
+    A[Browser React/Vite] <-->|Voice WebM / TTS| B(FastAPI Backend)
+    B -->|Gemini Extraction| C{State Machine}
+    C -->|Iterate States: Greeting, Intent, Slots, Confirm| B
     C -->|SUBMIT| D[(Supabase)]
-    B -->|Gemini TTS| A
 ```
 
 ### 🧠 State Machine
