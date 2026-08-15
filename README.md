@@ -1,6 +1,6 @@
 # 🎙️ JustSpeak (ஒன்று பேசு)
 
-> **Voice-first Tamil digital literacy agent for old-age pension applications.**
+> ***Voice-first Tamil digital literacy agent for old-age pension applications.***
 > Zero reading or typing required — an end-to-end voice-only accessible interface.
 
 ![Vite](https://img.shields.io/badge/Vite-B73BFE?style=for-the-badge&logo=vite&logoColor=FFD62E)
