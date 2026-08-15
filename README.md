@@ -116,12 +116,10 @@ npm run dev
    - `VITE_API_URL`: Your deployed Render backend URL (e.g., `https://justspeak-backend.onrender.com`) - *Make sure there is no trailing slash!*
 4. Click **Deploy**.
 
----
 
 ## 🔮 Future Scope
 - Expand language support to more regional Indian languages (Hindi, Telugu, Malayalam).
 - Deep integration with real government e-Sevai portal APIs.
 - WhatsApp voice bot integration to completely bypass the need for a web browser.
 
----
-...
+
