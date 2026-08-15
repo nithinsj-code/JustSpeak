@@ -387,6 +387,61 @@ export default function App() {
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`
   }
 
+  const getSlotInfo = (key) => {
+    if (!slotsData) return null
+    if (slotsData[key]) return slotsData[key]
+    
+    // Check aliases
+    const aliasMap = {
+      aadhaar_last4: ['aadhaar', 'aadhaar_last_4', 'aadhaar_last_4_digits', 'aadhaar_number', 'aadhaar_digits'],
+      has_bank_account: ['bank_account', 'bank', 'bank_account_yes_no', 'has_bank'],
+      monthly_income_band: ['monthly_income', 'income', 'income_band', 'monthly_income_level'],
+      village_district: ['district', 'village', 'location', 'village_or_district', 'address'],
+      full_name: ['name', 'applicant_name', 'user_name'],
+      gender: ['sex'],
+      age: ['applicant_age'],
+    }
+    
+    if (aliasMap[key]) {
+      for (const alt of aliasMap[key]) {
+        if (slotsData[alt]) return slotsData[alt]
+      }
+    }
+    for (const [canonical, aliases] of Object.entries(aliasMap)) {
+      if (aliases.includes(key) && slotsData[canonical]) {
+        return slotsData[canonical]
+      }
+    }
+    return null
+  }
+
+  const formatSlotDisplay = (value, slotKey) => {
+    if (!value) return ''
+    if (lang !== 'ta') return value
+    
+    const valLower = String(value).trim().toLowerCase()
+    if (valLower === 'male' || valLower === 'man') return 'ஆண்'
+    if (valLower === 'female' || valLower === 'woman') return 'பெண்'
+    if (valLower === 'other') return 'மற்றவை'
+    if (valLower === 'yes' || valLower === 'true' || valLower === 'y') return 'ஆம்'
+    if (valLower === 'no' || valLower === 'false' || valLower === 'n') return 'இல்லை'
+    if (valLower === '<1000' || valLower.includes('less than 1000') || valLower.includes('< 1000')) return '1000-க்கும் குறைவு'
+    if (valLower === '1000-2000' || valLower.includes('1000 to 2000')) return '1000 முதல் 2000 வரை'
+    if (valLower === '>2000' || valLower.includes('more than 2000') || valLower.includes('> 2000')) return '2000-க்கும் மேல்'
+    if (valLower === 'salem') return 'சேலம்'
+    if (valLower === 'chennai') return 'சென்னை'
+    if (valLower === 'madurai') return 'மதுரை'
+    if (valLower === 'coimbatore') return 'கோயம்புத்தூர்'
+    if (valLower === 'tiruvannamalai') return 'திருவண்ணாமலை'
+    if (valLower === 'trichy' || valLower === 'tiruchirappalli') return 'திருச்சிராப்பள்ளி'
+    if (valLower === 'thanjavur') return 'தஞ்சாவூர்'
+    if (valLower === 'vellore') return 'வேலூர்'
+    if (valLower === 'tirunelveli') return 'திருநெல்வேலி'
+    if (valLower === 'erode') return 'ஈரோடு'
+    if (valLower === 'sachin') return 'சச்சின்'
+    return value
+  }
+
   const getStatusText = () => {
     if (appState === 'listening') return lang === 'ta' ? 'கேட்கிறேன்...' : 'Listening...'
     if (appState === 'thinking') return lang === 'ta' ? 'யோசிக்கிறேன்...' : 'Processing...'
@@ -665,12 +720,21 @@ export default function App() {
               </div>
               
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                {slotsConfig.map((slot) => {
-                  const isActive = currentSlot === slot.key;
-                  const slotValue = slotsData[slot.key]?.value || '';
-                  const isSkipped = slotsData[slot.key]?.skipped;
-                  const displayValue = isSkipped ? (lang === 'ta' ? 'தவிர்க்கப்பட்டது' : 'Skipped') : slotValue;
-                  const isFilled = !!displayValue;
+                {slotsConfig
+                  .filter((s) => !s.key.toLowerCase().includes('phone') && !s.key.toLowerCase().includes('mobile') && !(s.label_ta && s.label_ta.includes('தொலைபேசி')))
+                  .map((slot) => {
+                    const isActive = currentSlot === slot.key || 
+                      (slot.key === 'aadhaar_last4' && currentSlot?.includes('aadhaar')) ||
+                      (slot.key === 'has_bank_account' && currentSlot?.includes('bank')) ||
+                      (slot.key === 'monthly_income_band' && currentSlot?.includes('income'));
+                    
+                    const slotInfo = getSlotInfo(slot.key);
+                    const rawValue = slotInfo?.value || '';
+                    const isSkipped = slotInfo?.skipped;
+                    const slotValue = formatSlotDisplay(rawValue, slot.key);
+                    const displayValue = isSkipped ? (lang === 'ta' ? 'தவிர்க்கப்பட்டது' : 'Skipped') : slotValue;
+                    const isFilled = !!displayValue;
+
                   
                   return (
                     <motion.div 

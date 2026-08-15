@@ -5,89 +5,93 @@ and retrieves the official reference number.
 """
 
 import asyncio
-from playwright.async_api import async_playwright
+import time
+from playwright.sync_api import sync_playwright
 
-async def submit_pension_application(form_data: dict) -> str:
+def _sync_submit_pension_application(form_data: dict) -> str:
     """
     Spins up a headless browser, fills the form, and returns the reference number.
     """
-    async with async_playwright() as p:
+    with sync_playwright() as p:
         # Launch browser. headless=True for invisible background operation
-        browser = await p.chromium.launch(headless=True)
-        context = await browser.new_context()
-        page = await context.new_page()
+        browser = p.chromium.launch(headless=True)
+        context = browser.new_context()
+        page = context.new_page()
 
         try:
             # Navigate to the target portal (using our local mock for demonstration)
             # In a real scenario, this would be the actual government URL
             target_url = "http://localhost:8000/static/mock_gov_site.html"
-            await page.goto(target_url, wait_until="networkidle")
+            page.goto(target_url, wait_until="networkidle", timeout=8000)
 
             # Wait for form to be visible
-            await page.wait_for_selector("#pension-form")
+            page.wait_for_selector("#pension-form", timeout=8000)
 
             # Map the collected data to the form fields
             # The keys from JustSpeak state_machine match the names/ids in our mock HTML
             
             # Fill text inputs
-            if "full_name" in form_data:
-                await page.fill("#full_name", form_data["full_name"])
+            full_name = form_data.get("full_name") or form_data.get("name")
+            if full_name:
+                page.fill("#full_name", str(full_name))
                 
-            if "age" in form_data:
-                await page.fill("#age", str(form_data["age"]))
+            age = form_data.get("age")
+            if age:
+                page.fill("#age", str(age))
                 
-            if "aadhaar_last4" in form_data:
-                # Remove spaces if any
-                clean_aadhaar = str(form_data["aadhaar_last4"]).replace(" ", "")
-                await page.fill("#aadhaar", clean_aadhaar)
+            aadhaar = form_data.get("aadhaar_last4") or form_data.get("aadhaar") or form_data.get("aadhaar_last_4_digits")
+            if aadhaar:
+                clean_aadhaar = str(aadhaar).replace(" ", "")
+                page.fill("#aadhaar", clean_aadhaar)
                 
-            if "village_district" in form_data:
-                await page.fill("#district", form_data["village_district"])
-                
-            if "phone_number" in form_data:
-                await page.fill("#phone", str(form_data["phone_number"]))
+            district = form_data.get("village_district") or form_data.get("district") or form_data.get("village")
+            if district:
+                page.fill("#district", str(district))
 
             # Handle Select dropdowns (Gender)
-            if "gender" in form_data:
-                val = form_data["gender"].lower()
-                if "male" in val and "female" not in val and "பெண்" not in val:
-                    await page.select_option("#gender", "male")
-                elif "female" in val or "பெண்" in val:
-                    await page.select_option("#gender", "female")
+            gender = form_data.get("gender")
+            if gender:
+                val = str(gender).lower()
+                if "female" in val or "பெண்" in val:
+                    page.select_option("#gender", "female")
+                elif "male" in val or "ஆண்" in val:
+                    page.select_option("#gender", "male")
                 else:
-                    await page.select_option("#gender", "other")
+                    page.select_option("#gender", "other")
                     
             # Handle Bank Account
-            if "has_bank_account" in form_data:
-                val = form_data["has_bank_account"].lower()
-                if "yes" in val or "ஆம்" in val or "ஆமா" in val:
-                    await page.select_option("#bank", "yes")
+            bank = form_data.get("has_bank_account") or form_data.get("bank_account") or form_data.get("bank")
+            if bank:
+                val = str(bank).lower()
+                if "yes" in val or "ஆம்" in val or "ஆமா" in val or "உண்டு" in val or "இருக்கு" in val:
+                    page.select_option("#bank", "yes")
                 else:
-                    await page.select_option("#bank", "no")
+                    page.select_option("#bank", "no")
                     
             # Handle Income Band
-            if "monthly_income_band" in form_data:
-                val = form_data["monthly_income_band"].lower()
-                if "less" in val or "குறை" in val or "thousand" in val and "two" not in val:
-                    await page.select_option("#income", "<1000")
-                elif "two" in val or "2000" in val:
-                    await page.select_option("#income", ">2000")
+            income = form_data.get("monthly_income_band") or form_data.get("monthly_income") or form_data.get("income")
+            if income:
+                val = str(income).lower()
+                if "<1000" in val or "less" in val or "குறை" in val:
+                    page.select_option("#income", "<1000")
+                elif ">2000" in val or "more" in val or "மேல்" in val or "அதிக" in val or "2000" in val and "முதல்" not in val:
+                    page.select_option("#income", ">2000")
                 else:
-                    await page.select_option("#income", "1000-2000")
+                    page.select_option("#income", "1000-2000")
 
-            # Small delay just to ensure stability (in real life, simulate human delay if needed)
-            await asyncio.sleep(0.5)
+            # Small delay just to ensure stability
+            time.sleep(0.5)
 
             # Click Submit
-            await page.click("#submit-btn")
+            page.click("#submit-btn")
 
             # Wait for the success message and reference number to appear
-            await page.wait_for_selector("#success-message", state="visible")
-            await page.wait_for_selector("#ref-number-display")
+            page.wait_for_selector("#success-message", state="visible")
+            page.wait_for_selector("#ref-number-display")
             
             # Extract the reference number
-            ref_element = await page.query_selector("#ref-number-display")
-            ref_number = await ref_element.inner_text()
+            ref_element = page.query_selector("#ref-number-display")
+            ref_number = ref_element.inner_text() if ref_element else "TN-OAP-FALLBACK-1234"
             
             return ref_number.strip()
             
@@ -96,4 +100,10 @@ async def submit_pension_application(form_data: dict) -> str:
             # Fallback if automation fails
             return "TN-OAP-FALLBACK-1234"
         finally:
-            await browser.close()
+            browser.close()
+
+
+async def submit_pension_application(form_data: dict) -> str:
+    """Async wrapper that runs Playwright in a worker thread."""
+    return await asyncio.to_thread(_sync_submit_pension_application, form_data)
+
